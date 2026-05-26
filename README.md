@@ -2,6 +2,20 @@
 
 EasyX 图形库实现的古风五子棋/六子棋小游戏，包含账号系统、人机对战、排行榜、残局挑战、存档和密码重置功能。
 
+## 运行截图
+
+登录界面：
+
+![登录界面](screenshots/login.png)
+
+游客主菜单：
+
+![游客主菜单](screenshots/menu.png)
+
+对局界面：
+
+![对局界面](screenshots/game.png)
+
 ## 运行环境
 
 - Windows
@@ -35,3 +49,6 @@ g++ 1.cpp -o 1.exe -leasyx -lgdi32 -limm32 -lmsimg32 -lole32 -loleaut32 -finput-
 - `save.dat`
 - `save_*.dat`
 - `admin_key.txt`
+- `2202502640-邹清宇-程序设计实践课程设计-五子棋游戏.docx`
+- `工作周志.txt`
+- `五子棋.pptx`
