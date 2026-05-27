@@ -48,7 +48,6 @@ jobs:
         uses: xiaoju111a/kimi-actions@main
         with:
           kimi_api_key: ${{ secrets.KIMI }}
-          kimi_base_url: ${{ secrets.KIMI_BASE_URL }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           language: zh-CN
           model: kimi-k2.5
