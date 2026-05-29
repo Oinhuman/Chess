@@ -6,11 +6,11 @@ EasyX 图形库实现的古风五子棋/六子棋小游戏，包含账号系统�
 
 以下图片展示程序运行中的登录入口、对局界面和个人数据页面。
 
-![登录入口](image/runtime-login.png)
+![登录入口](Chess/image/runtime-login.png)
 
-![对局界面](image/runtime-game.png)
+![对局界面](Chess/image/runtime-game.png)
 
-![个人数据](image/runtime-stats.png)
+![个人数据](Chess/image/runtime-stats.png)
 
 ## 运行环境
 
