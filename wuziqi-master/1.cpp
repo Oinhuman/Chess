@@ -2,7 +2,7 @@
  * 凡人修仙传 · 五子棋（人机对战）
  * 使用 EasyX 图形库开发
  * 功能：完善账号系统、强化AI、丰富规则、修仙风格界面
- * 编译：g++ 1.cpp -o 1.exe -leasyx -lgdi32 -limm32 -lmsimg32 -lole32 -loleaut32 -finput-charset=UTF-8 -fexec-charset=UTF-8
+ * 编译：g++ 1.cpp -o 1.exe -leasyx -lgdi32 -limm32 -lmsimg32 -lole32 -loleaut32 -lwinhttp -lcrypt32 -finput-charset=UTF-8 -fexec-charset=UTF-8
  */
 
 #include <graphics.h>
@@ -14,12 +14,14 @@
 #include <math.h>
 #include <ctype.h>
 #include <windows.h>
+#include <winhttp.h>
+#include <wincrypt.h>
 
 #define BOARD_SIZE 15
 #define CELL_SIZE  48
 #define MARGIN     55
-#define WIN_WIDTH  1000
-#define WIN_HEIGHT 820
+#define WIN_WIDTH  1220
+#define WIN_HEIGHT 860
 #define BTN_W      260
 #define BTN_H      52
 #define MAX_HISTORY (BOARD_SIZE * BOARD_SIZE)
@@ -29,6 +31,11 @@
 #define CHALLENGE_COUNT 3
 #define ADMIN_KEY_FILE "admin_key.txt"
 #define DEFAULT_RESET_PASSWORD "123456"
+#define MODEL_API_KEY_MAX 256
+#define MODEL_NAME_TEXT "glm-5.1"
+#define MODEL_API_HOST L"open.bigmodel.cn"
+#define MODEL_API_PATH L"/api/paas/v4/chat/completions"
+#define MODEL_CANDIDATE_MAX 18
 
 /* ===================== 修仙古风配色 ===================== */
 COLORREF LINE_COLOR   = RGB(180, 160, 120);  // 古铜金线
@@ -109,6 +116,28 @@ struct Button {
     const wchar_t* text;
 };
 
+struct StatRecord {
+    char user[64];
+    int difficulty;
+    int result;
+    int timeValue;
+    int steps;
+    int mode;
+    int winLength;
+    int modelFlag;
+};
+
+struct StatSummary {
+    int wins[4];
+    int losses[4];
+    int draws[4];
+    int modeWins[2];
+    int modeGames[2];
+    int totalGames;
+    int currentStreak;
+    int bestStreak;
+};
+
 /* ===================== 全局变量 ===================== */
 int board[BOARD_SIZE][BOARD_SIZE];
 Move history[MAX_HISTORY];
@@ -141,6 +170,11 @@ int challengeMoveLimit = 0;
 int challengePlayerMoves = 0;
 int challengeBaseHistory = 0;
 int challengeBasePlayerStones = 0;
+int modelDuelMode = 0;
+int modelDuelPlayerScore = 0;
+int modelDuelModelScore = 0;
+int modelDuelDrawScore = 0;
+wchar_t modelDuelStatus[128] = L"";
 
 const wchar_t* challengeNames[CHALLENGE_COUNT] = {
     L"残局·双活杀", L"残局·攻守劫", L"残局·乱战局"
@@ -159,6 +193,12 @@ int challengeNoiseMax[CHALLENGE_COUNT] = {26, 36, 46};
 int checkWin(int x, int y, int color);
 int isBoardFull();
 int evaluatePointAdvanced(int x, int y, int color);
+int isForbiddenMove(int x, int y, int color);
+int isInsideBoard(int x, int y);
+int hasImmediateWin(int color, int* outX, int* outY);
+int isLegalMoveForColor(int x, int y, int color);
+int tryBuildModelChallengeBoard(int index);
+void setModelDuelStatus(const wchar_t* text);
 
 /* ===================== 工具函数 ===================== */
 unsigned int simpleHash(const char* str) {
@@ -294,6 +334,99 @@ void loadAdminKey(char* out, int maxLen) {
         if (fgets(out, maxLen, fp)) trimLineEnd(out);
         fclose(fp);
     }
+}
+
+void buildUserModelKeyPath(const char* name, char* path, int maxLen) {
+    const char* owner = (name && name[0]) ? name : "Guest";
+    snprintf(path, maxLen, "glm_key_%08X.dat", simpleHash(owner));
+    path[maxLen - 1] = 0;
+}
+
+int saveModelApiKey(const char* apiKey) {
+    if (!apiKey || apiKey[0] == 0) return 0;
+    char path[64];
+    const char* owner = currentUser[0] ? currentUser : "Guest";
+    buildUserModelKeyPath(owner, path, 64);
+
+    DATA_BLOB in;
+    DATA_BLOB out;
+    memset(&in, 0, sizeof(in));
+    memset(&out, 0, sizeof(out));
+    in.pbData = (BYTE*)apiKey;
+    in.cbData = (DWORD)strlen(apiKey);
+    if (!CryptProtectData(&in, L"wuziqi glm api key", NULL, NULL, NULL,
+                          CRYPTPROTECT_UI_FORBIDDEN, &out)) {
+        return 0;
+    }
+
+    FILE* fp = fopen(path, "wb");
+    if (!fp) {
+        LocalFree(out.pbData);
+        return 0;
+    }
+    size_t written = fwrite(out.pbData, 1, out.cbData, fp);
+    fclose(fp);
+    LocalFree(out.pbData);
+    return written == out.cbData;
+}
+
+int loadModelApiKey(char* out, int maxLen) {
+    if (!out || maxLen <= 0) return 0;
+    out[0] = 0;
+    char path[64];
+    const char* owner = currentUser[0] ? currentUser : "Guest";
+    buildUserModelKeyPath(owner, path, 64);
+
+    FILE* fp = fopen(path, "rb");
+    if (!fp) return 0;
+    unsigned char encrypted[2048];
+    size_t len = fread(encrypted, 1, sizeof(encrypted), fp);
+    int tooLarge = !feof(fp);
+    fclose(fp);
+    if (len == 0 || tooLarge) return 0;
+
+    DATA_BLOB in;
+    DATA_BLOB plain;
+    memset(&in, 0, sizeof(in));
+    memset(&plain, 0, sizeof(plain));
+    in.pbData = encrypted;
+    in.cbData = (DWORD)len;
+    if (!CryptUnprotectData(&in, NULL, NULL, NULL, NULL,
+                            CRYPTPROTECT_UI_FORBIDDEN, &plain)) {
+        return 0;
+    }
+    int copyLen = (plain.cbData < (DWORD)(maxLen - 1)) ? (int)plain.cbData : maxLen - 1;
+    memcpy(out, plain.pbData, copyLen);
+    out[copyLen] = 0;
+    LocalFree(plain.pbData);
+    return out[0] != 0;
+}
+
+int hasModelApiKey() {
+    char key[MODEL_API_KEY_MAX];
+    return loadModelApiKey(key, MODEL_API_KEY_MAX);
+}
+
+void clearModelDuelSession() {
+    modelDuelMode = 0;
+    modelDuelPlayerScore = 0;
+    modelDuelModelScore = 0;
+    modelDuelDrawScore = 0;
+    modelDuelStatus[0] = 0;
+}
+
+void resetModelDuelScore() {
+    modelDuelPlayerScore = 0;
+    modelDuelModelScore = 0;
+    modelDuelDrawScore = 0;
+    wcscpy(modelDuelStatus, L"GLM-5.1 已就绪");
+}
+
+void enterUserSession(const char* name, int level, int exp) {
+    safeCopy(currentUser, name && name[0] ? name : "Guest", 64);
+    currentUserLevel = level;
+    currentUserExp = exp;
+    clearModelDuelSession();
 }
 
 int isValidUsername(const char* name) {
@@ -514,10 +647,16 @@ void addUserExp(const char* name, int delta) {
 
 void saveStats(int result) {
     if (challengeMode) return;
+    if (modelDuelMode) {
+        if (result == 1) modelDuelPlayerScore++;
+        else if (result == 0) modelDuelModelScore++;
+        else if (result == 2) modelDuelDrawScore++;
+    }
     FILE* fp = fopen("stats.dat", "a");
     if (fp) {
-        fprintf(fp, "%s %d %d %d %d %d %d\n",
-                currentUser, difficulty, result, (int)time(NULL), stepCount, gameMode, getWinLength());
+        fprintf(fp, "%s %d %d %d %d %d %d %d\n",
+                currentUser, difficulty, result, (int)time(NULL), stepCount,
+                gameMode, getWinLength(), modelDuelMode ? 1 : 0);
         fclose(fp);
     }
     if (strcmp(currentUser, "Guest") != 0) {
@@ -526,6 +665,89 @@ void saveStats(int result) {
         else if (result == 2) delta = 8 + difficulty * 2;
         addUserExp(currentUser, delta);
     }
+}
+
+int parseStatLine(const char* line, StatRecord* rec) {
+    if (!line || !rec) return 0;
+    memset(rec, 0, sizeof(StatRecord));
+    rec->mode = MODE_GOMOKU;
+    rec->winLength = 5;
+    rec->modelFlag = 0;
+    int parsed = sscanf(line, "%63s %d %d %d %d %d %d %d",
+                        rec->user, &rec->difficulty, &rec->result, &rec->timeValue,
+                        &rec->steps, &rec->mode, &rec->winLength, &rec->modelFlag);
+    if (parsed < 3) return 0;
+    if (parsed < 6) rec->mode = MODE_GOMOKU;
+    if (parsed < 7) rec->winLength = (rec->mode == MODE_CONNECT6) ? 6 : 5;
+    if (parsed < 8) rec->modelFlag = 0;
+    if (rec->difficulty < 1 || rec->difficulty > 3) return 0;
+    if (rec->result < 0 || rec->result > 2) return 0;
+    if (rec->mode != MODE_GOMOKU && rec->mode != MODE_CONNECT6) rec->mode = MODE_GOMOKU;
+    rec->modelFlag = rec->modelFlag ? 1 : 0;
+    return 1;
+}
+
+void initStatSummary(StatSummary* s) {
+    if (!s) return;
+    memset(s, 0, sizeof(StatSummary));
+}
+
+void addStatToSummary(StatSummary* s, const StatRecord* rec) {
+    if (!s || !rec) return;
+    int diff = rec->difficulty;
+    if (rec->result == 1) s->wins[diff]++;
+    else if (rec->result == 0) s->losses[diff]++;
+    else s->draws[diff]++;
+    s->modeGames[rec->mode]++;
+    if (rec->result == 1) s->modeWins[rec->mode]++;
+    if (rec->result == 1) {
+        s->currentStreak++;
+        if (s->currentStreak > s->bestStreak) s->bestStreak = s->currentStreak;
+    } else {
+        s->currentStreak = 0;
+    }
+    s->totalGames++;
+}
+
+void loadUserStatSummary(int modelFlag, StatSummary* out) {
+    initStatSummary(out);
+    FILE* fp = fopen("stats.dat", "r");
+    if (!fp) return;
+    char line[256];
+    while (fgets(line, sizeof(line), fp)) {
+        StatRecord rec;
+        if (!parseStatLine(line, &rec)) continue;
+        if (strcmp(rec.user, currentUser) != 0) continue;
+        if (rec.modelFlag != modelFlag) continue;
+        addStatToSummary(out, &rec);
+    }
+    fclose(fp);
+}
+
+void resetUserStatsByModelFlag(int modelFlag) {
+    if (currentUser[0] == 0) return;
+    FILE* fp = fopen("stats.dat", "r");
+    if (!fp) return;
+    char lines[4000][128];
+    int lineCount = 0;
+    char line[128];
+    while (fgets(line, sizeof(line), fp) && lineCount < 4000) {
+        safeCopy(lines[lineCount], line, 128);
+        lineCount++;
+    }
+    fclose(fp);
+    fp = fopen("stats.dat", "w");
+    if (!fp) return;
+    for (int i = 0; i < lineCount; i++) {
+        StatRecord rec;
+        if (parseStatLine(lines[i], &rec) &&
+            strcmp(rec.user, currentUser) == 0 &&
+            rec.modelFlag == modelFlag) {
+            continue;
+        }
+        fputs(lines[i], fp);
+    }
+    fclose(fp);
 }
 
 void resetUserStats() {
@@ -604,6 +826,7 @@ int deleteUserAccount(const char* name) {
 }
 
 void resetGuestSessionData() {
+    clearModelDuelSession();
     removeStatsForUser("Guest");
     removeSaveForUser("Guest");
     if (strcmp(currentUser, "Guest") == 0) {
@@ -989,7 +1212,15 @@ void loadChallengeBoard(int index) {
     timeLimit = 0;
     showHints = 0;
 
-    if (!tryBuildRandomChallenge(index)) {
+    int builtByModel = 0;
+    if (modelDuelMode && !isGuestUser() && hasModelApiKey()) {
+        builtByModel = tryBuildModelChallengeBoard(index);
+        setModelDuelStatus(builtByModel ? L"GLM-5.1 已生成残局" : L"GLM残局失败，本地生成");
+    } else if (modelDuelMode) {
+        setModelDuelStatus(L"未配置API Key，本地生成残局");
+    }
+
+    if (!builtByModel && !tryBuildRandomChallenge(index)) {
         initBoard();
         seedChallengeStone(4, 7, 1); seedChallengeStone(5, 7, 1); seedChallengeStone(6, 7, 1);
         seedChallengeStone(7, 4, 1); seedChallengeStone(7, 5, 1); seedChallengeStone(7, 6, 1);
@@ -1242,8 +1473,10 @@ void drawResultOverlay(int result) {
         TextOutW(hdc, x + 30, y + h - 64, winTitle, wcslen(winTitle));
         SetTextColor(hdc, TEXT_WHITE);
         settextstyle(18, 0, "SimHei");
-        const wchar_t* winLine1 = challengeMode ? L"天机：此阵竟被你寻到生门。" : L"天机：此局是本座失算。";
-        const wchar_t* winLine2 = challengeMode ? L"这一手，算得上破局。" : L"道友这一手，算得上漂亮。";
+        const wchar_t* winLine1 = challengeMode ? L"天机：此阵竟被你寻到生门。"
+            : (modelDuelMode ? L"GLM-5.1：此局我已记下。" : L"天机：此局是本座失算。");
+        const wchar_t* winLine2 = challengeMode ? L"这一手，算得上破局。"
+            : (modelDuelMode ? L"点击继续下一局，比分继续累积。" : L"道友这一手，算得上漂亮。");
         TextOutW(hdc, x + 30, y + h - 22, winLine1, wcslen(winLine1));
         TextOutW(hdc, x + 30, y + h + 8, winLine2, wcslen(winLine2));
         SetTextColor(hdc, ACCENT_GOLD);
@@ -1256,12 +1489,14 @@ void drawResultOverlay(int result) {
     setlinecolor(PANEL_BORDER);
     fillroundrect(x, y, x + w, y + h, 14, 14);
     roundrect(x + 6, y + 6, x + w - 6, y + h - 6, 12, 12);
-    const wchar_t* title = (result == 0) ? L"天机胜" : L"平局";
+    const wchar_t* title = (result == 0) ? (modelDuelMode && !challengeMode ? L"模型胜" : L"天机胜") : L"平局";
     const wchar_t* line1 = (result == 0)
-        ? (challengeMode ? L"天机：残局最忌贪心，错一手便无路。" : L"天机：区区炼气期，也敢挑战本座？")
-        : L"天机：今日算你命大，且饶你一局。";
+        ? (challengeMode ? L"天机：残局最忌贪心，错一手便无路。"
+                         : (modelDuelMode ? L"GLM-5.1：这一局由我拿下。" : L"天机：区区炼气期，也敢挑战本座？"))
+        : (modelDuelMode ? L"GLM-5.1：此局平分秋色。" : L"天机：今日算你命大，且饶你一局。");
     const wchar_t* line2 = (result == 0)
-        ? (challengeMode ? L"换一招，再来破阵。" : L"回去再修三百年吧。")
+        ? (challengeMode ? L"换一招，再来破阵。"
+                         : (modelDuelMode ? L"点击继续下一局，比分继续累积。" : L"回去再修三百年吧。"))
         : L"";
     SetTextColor(hdc, result == 0 ? RGB(255, 120, 100) : TEXT_WHITE);
     settextstyle(34, 0, "SimHei");
@@ -1287,6 +1522,19 @@ void drawLeftText(int x, int y, const wchar_t* str, int height, COLORREF c) {
     TextOutW(hdc, x + 2, y + 2, str, wcslen(str));
     SetTextColor(hdc, c);
     TextOutW(hdc, x, y, str, wcslen(str));
+}
+
+void drawBoxCenterText(int x, int w, int y, const wchar_t* str, int height, COLORREF c) {
+    settextstyle(height, 0, "SimHei");
+    HDC hdc = GetImageHDC(NULL);
+    SetBkMode(hdc, TRANSPARENT);
+    SIZE sz;
+    GetTextExtentPoint32W(hdc, str, wcslen(str), &sz);
+    int tx = x + (w - sz.cx) / 2;
+    SetTextColor(hdc, RGB(0, 0, 0));
+    TextOutW(hdc, tx + 2, y + 2, str, wcslen(str));
+    SetTextColor(hdc, c);
+    TextOutW(hdc, tx, y, str, wcslen(str));
 }
 
 int evaluatePointAdvanced(int x, int y, int color);
@@ -1442,63 +1690,91 @@ void drawSmallButton(const Button* btn, int hover, int fontSize) {
 void drawInfoPanel(int gameOver, int result, int currentTurn) {
     HDC hdc = GetImageHDC(NULL);
     SetBkMode(hdc, TRANSPARENT);
-    int px = 760, py = 90, pw = 210;
+    int px = 770, py = 82, pw = WIN_WIDTH - 810;
+    if (pw < 360) pw = 360;
+    int panelBottom = WIN_HEIGHT - 86;
     setfillcolor(PANEL_BG);
     setlinecolor(PANEL_BORDER);
-    fillroundrect(px - 12, py - 15, px + pw + 12, py + 540, 14, 14);
-    wchar_t buf[128];
-    drawLeftText(px, py, L"对局信息", 24, ACCENT_GOLD);
-    py += 42;
+    fillroundrect(px - 14, py - 16, px + pw + 14, panelBottom, 14, 14);
+    roundrect(px - 10, py - 12, px + pw + 10, panelBottom - 4, 12, 12);
+    wchar_t buf[160];
+    drawBoxCenterText(px, pw, py, L"对局信息", 26, ACCENT_GOLD);
+    py += 40;
+    setlinecolor(RGB(100, 85, 58));
+    line(px + 28, py, px + pw - 28, py);
+    py += 20;
     wchar_t wuser[64]; asciiToWchar(currentUser, wuser, 64);
     wsprintfW(buf, L"道友: %s", wuser);
-    drawLeftText(px, py, buf, 18, TEXT_WHITE);
-    py += 32;
+    drawBoxCenterText(px, pw, py, buf, 18, TEXT_WHITE);
+    py += 30;
     const wchar_t* realm = getXianLevelName(currentUserExp);
     wsprintfW(buf, L"境界: %s", realm);
-    drawLeftText(px, py, buf, 18, ACCENT_GOLD);
-    py += 32;
+    drawBoxCenterText(px, pw, py, buf, 18, ACCENT_GOLD);
+    py += 30;
     const wchar_t* diffName[4] = {L"", L"简单", L"中等", L"困难"};
     wsprintfW(buf, L"难度: %s", diffName[difficulty]);
-    drawLeftText(px, py, buf, 18, TEXT_WHITE);
-    py += 32;
-    wsprintfW(buf, L"模式: %s", challengeMode ? L"残局挑战" : getModeName());
-    drawLeftText(px, py, buf, 18, TEXT_WHITE);
-    py += 32;
+    drawBoxCenterText(px, pw, py, buf, 18, TEXT_WHITE);
+    py += 34;
+    setlinecolor(RGB(72, 62, 48));
+    line(px + 48, py, px + pw - 48, py);
+    py += 18;
+    const wchar_t* panelModeText = challengeMode ? L"残局挑战" : (modelDuelMode ? L"模型对局" : getModeName());
+    wsprintfW(buf, L"模式: %s", panelModeText);
+    drawBoxCenterText(px, pw, py, buf, 18, TEXT_WHITE);
+    py += 30;
+    if (!challengeMode && modelDuelMode) {
+        wsprintfW(buf, L"规则: %s", getModeName());
+        drawBoxCenterText(px, pw, py, buf, 18, TEXT_WHITE);
+        py += 30;
+        drawBoxCenterText(px, pw, py, L"模型: GLM-5.1", 18, ACCENT_GOLD);
+        py += 30;
+        wsprintfW(buf, L"比分: 道友%d 模型%d 平%d",
+                  modelDuelPlayerScore, modelDuelModelScore, modelDuelDrawScore);
+        drawBoxCenterText(px, pw, py, buf, 16, TEXT_WHITE);
+        py += 28;
+        if (modelDuelStatus[0]) {
+            drawBoxCenterText(px, pw, py, modelDuelStatus, 16, RGB(220, 205, 160));
+            py += 28;
+        }
+    }
     wsprintfW(buf, L"目标: 连%d成阵", getWinLength());
-    drawLeftText(px, py, buf, 18, TEXT_WHITE);
-    py += 32;
+    drawBoxCenterText(px, pw, py, buf, 18, TEXT_WHITE);
+    py += 30;
     if (challengeMode) {
         wsprintfW(buf, L"残局: %s", getChallengeName());
-        drawLeftText(px, py, buf, 18, ACCENT_GOLD);
-        py += 32;
+        drawBoxCenterText(px, pw, py, buf, 18, ACCENT_GOLD);
+        py += 30;
         int remainMoves = challengeMoveLimit - challengePlayerMoves;
         if (remainMoves < 0) remainMoves = 0;
         wsprintfW(buf, L"限手: 剩%d/%d", remainMoves, challengeMoveLimit);
-        drawLeftText(px, py, buf, 18, remainMoves <= 1 ? RGB(255, 120, 100) : TEXT_WHITE);
-        py += 32;
+        drawBoxCenterText(px, pw, py, buf, 18, remainMoves <= 1 ? RGB(255, 120, 100) : TEXT_WHITE);
+        py += 30;
     }
     wsprintfW(buf, L"执子: %s", (playerColor == 1) ? L"玄黑(先)" : L"玉白(后)");
-    drawLeftText(px, py, buf, 18, TEXT_WHITE);
-    py += 32;
+    drawBoxCenterText(px, pw, py, buf, 18, TEXT_WHITE);
+    py += 30;
     wsprintfW(buf, L"规则: %s", (gameMode == MODE_CONNECT6) ? L"六连无禁手" : (useForbidden ? L"有禁手" : L"无禁手"));
-    drawLeftText(px, py, buf, 18, TEXT_WHITE);
-    py += 32;
+    drawBoxCenterText(px, pw, py, buf, 18, TEXT_WHITE);
+    py += 30;
     wsprintfW(buf, L"心眼: %s", showHints ? L"开启" : L"关闭");
-    drawLeftText(px, py, buf, 18, showHints ? ACCENT_GOLD : TEXT_WHITE);
-    py += 32;
+    drawBoxCenterText(px, pw, py, buf, 18, showHints ? ACCENT_GOLD : TEXT_WHITE);
+    py += 30;
     wsprintfW(buf, L"步数: %d", stepCount);
-    drawLeftText(px, py, buf, 18, TEXT_WHITE);
-    py += 32;
+    drawBoxCenterText(px, pw, py, buf, 18, TEXT_WHITE);
+    py += 34;
+    setlinecolor(RGB(72, 62, 48));
+    line(px + 48, py, px + pw - 48, py);
+    py += 18;
     if (!gameOver) {
-        wsprintfW(buf, L"回合: %s", (currentTurn == playerColor) ? L"道友" : L"天机");
-        drawLeftText(px, py, buf, 18, ACCENT_GOLD);
-        py += 32;
+        wsprintfW(buf, L"回合: %s", (currentTurn == playerColor) ? L"道友" : (modelDuelMode ? L"GLM-5.1" : L"天机"));
+        drawBoxCenterText(px, pw, py, buf, 18, ACCENT_GOLD);
+        py += 30;
         int need = getTurnMoveNeed(currentTurn);
         int remain = need - turnPlacedThisRound;
         if (remain < 1) remain = 1;
         wsprintfW(buf, L"本回合: 还落%d子", remain);
-        drawLeftText(px, py, buf, 18, TEXT_WHITE);
-        py += 32;
+        drawBoxCenterText(px, pw, py, buf, 18, TEXT_WHITE);
+        py += 30;
     }
     if (gameRunning && !gameOver && timeLimit > 0) {
         DWORD elapsed = (GetTickCount() - stepStartTime) / 1000;
@@ -1506,14 +1782,14 @@ void drawInfoPanel(int gameOver, int result, int currentTurn) {
         if (remain < 0) remain = 0;
         wsprintfW(buf, L"剩余: %d秒", remain);
         COLORREF tc = (remain <= 5) ? RGB(255, 80, 80) : TEXT_WHITE;
-        drawLeftText(px, py, buf, 18, tc);
-        py += 32;
+        drawBoxCenterText(px, pw, py, buf, 18, tc);
+        py += 30;
     }
     if (!gameOver && showHints) {
         COLORREF sitColor = TEXT_WHITE;
         if (getSituationText(buf, &sitColor)) {
-            drawLeftText(px, py, buf, 18, sitColor);
-            py += 32;
+            drawBoxCenterText(px, pw, py, buf, 18, sitColor);
+            py += 30;
         }
     }
 }
@@ -1589,6 +1865,697 @@ int canUndoNow() {
     if (turnPlacedThisRound > 0) return historyCount > minHistory;
     if (playerColor == 2 && historyCount <= minHistory + 1) return 0;
     return historyCount - minHistory >= 2;
+}
+
+/* ===================== 大模型对局 ===================== */
+void setModelDuelStatus(const wchar_t* text) {
+    if (!text) return;
+    wcsncpy(modelDuelStatus, text, 127);
+    modelDuelStatus[127] = 0;
+}
+
+void jsonEscape(const char* src, char* dst, int maxLen) {
+    if (!src || !dst || maxLen <= 0) return;
+    int pos = 0;
+    for (int i = 0; src[i] && pos < maxLen - 1; i++) {
+        unsigned char ch = (unsigned char)src[i];
+        const char* rep = NULL;
+        if (ch == '\\') rep = "\\\\";
+        else if (ch == '"') rep = "\\\"";
+        else if (ch == '\n') rep = "\\n";
+        else if (ch == '\r') rep = "\\r";
+        else if (ch == '\t') rep = "\\t";
+        if (rep) {
+            for (int k = 0; rep[k] && pos < maxLen - 1; k++) dst[pos++] = rep[k];
+        } else if (ch < 32) {
+            if (pos + 6 >= maxLen) break;
+            snprintf(dst + pos, maxLen - pos, "\\u%04X", ch);
+            pos += 6;
+        } else {
+            dst[pos++] = src[i];
+        }
+    }
+    dst[pos] = 0;
+}
+
+void buildBoardText(char* out, int maxLen) {
+    if (!out || maxLen <= 0) return;
+    out[0] = 0;
+    int pos = 0;
+    for (int y = 0; y < BOARD_SIZE && pos < maxLen - 1; y++) {
+        int written = snprintf(out + pos, maxLen - pos, "%02d ", y);
+        if (written < 0 || written >= maxLen - pos) break;
+        pos += written;
+        for (int x = 0; x < BOARD_SIZE && pos < maxLen - 1; x++) {
+            char ch = '.';
+            if (board[y][x] == 1) ch = 'B';
+            else if (board[y][x] == 2) ch = 'W';
+            out[pos++] = ch;
+        }
+        if (pos < maxLen - 1) out[pos++] = '\n';
+        out[pos] = 0;
+    }
+}
+
+struct ModelCandidate {
+    int id;
+    Move moves[2];
+    int count;
+    int score;
+    char note[48];
+};
+
+int scoreModelPoint(int x, int y, int color, char* note, int noteMax) {
+    if (!isLegalMoveForColor(x, y, color)) return -999999999;
+    int opColor = 3 - color;
+    int myShape = evaluatePointAdvanced(x, y, color);
+    int opShape = evaluatePointAdvanced(x, y, opColor);
+    int score = myShape * 3 + opShape * 2;
+    const char* reason = "布局";
+
+    board[y][x] = color;
+    int myWin = checkWin(x, y, color);
+    int leavesOpponentWin = hasImmediateWin(opColor, NULL, NULL);
+    board[y][x] = 0;
+    if (myWin) {
+        score += 500000000;
+        reason = "立即取胜";
+    } else {
+        board[y][x] = opColor;
+        int blocksWin = checkWin(x, y, opColor);
+        board[y][x] = 0;
+        if (blocksWin) {
+            score += 450000000;
+            reason = "必须防守";
+        } else if (leavesOpponentWin) {
+            score -= 120000000;
+            reason = "防守风险";
+        } else if (myShape >= opShape * 2 && myShape >= 10000) {
+            reason = "主动进攻";
+        } else if (opShape >= myShape && opShape >= 10000) {
+            reason = "压制威胁";
+        }
+    }
+
+    int dist = abs(x - BOARD_SIZE / 2) + abs(y - BOARD_SIZE / 2);
+    score -= dist * 5;
+    if (note && noteMax > 0) safeCopy(note, reason, noteMax);
+    return score;
+}
+
+int modelCandidateSame(const ModelCandidate* a, const ModelCandidate* b) {
+    if (!a || !b || a->count != b->count) return 0;
+    for (int i = 0; i < a->count; i++) {
+        if (a->moves[i].x != b->moves[i].x || a->moves[i].y != b->moves[i].y) return 0;
+    }
+    return 1;
+}
+
+void pushModelCandidate(ModelCandidate cands[], int* count, int maxCount, const ModelCandidate* cand) {
+    if (!cands || !count || !cand || maxCount <= 0) return;
+    for (int i = 0; i < *count; i++) {
+        if (modelCandidateSame(&cands[i], cand)) return;
+    }
+    int pos = *count;
+    if (*count < maxCount) {
+        (*count)++;
+    } else if (cand->score <= cands[*count - 1].score) {
+        return;
+    } else {
+        pos = *count - 1;
+    }
+    while (pos > 0 && cands[pos - 1].score < cand->score) {
+        cands[pos] = cands[pos - 1];
+        pos--;
+    }
+    cands[pos] = *cand;
+    for (int i = 0; i < *count; i++) cands[i].id = i + 1;
+}
+
+int collectModelSingleCandidates(ModelCandidate cands[], int maxCount, int color) {
+    int count = 0;
+    int hasStone = 0;
+    int nearby[BOARD_SIZE][BOARD_SIZE];
+    memset(nearby, 0, sizeof(nearby));
+    for (int y = 0; y < BOARD_SIZE; y++) {
+        for (int x = 0; x < BOARD_SIZE; x++) {
+            if (board[y][x] == 0) continue;
+            hasStone = 1;
+            for (int dy = -3; dy <= 3; dy++) {
+                for (int dx = -3; dx <= 3; dx++) {
+                    int nx = x + dx, ny = y + dy;
+                    if (isInsideBoard(nx, ny)) nearby[ny][nx] = 1;
+                }
+            }
+        }
+    }
+    if (!hasStone) {
+        ModelCandidate cand;
+        memset(&cand, 0, sizeof(cand));
+        cand.count = 1;
+        cand.moves[0].x = BOARD_SIZE / 2;
+        cand.moves[0].y = BOARD_SIZE / 2;
+        cand.score = 1000000;
+        safeCopy(cand.note, "占据天元", 48);
+        pushModelCandidate(cands, &count, maxCount, &cand);
+        return count;
+    }
+
+    for (int y = 0; y < BOARD_SIZE; y++) {
+        for (int x = 0; x < BOARD_SIZE; x++) {
+            if (!nearby[y][x]) continue;
+            if (!isLegalMoveForColor(x, y, color)) continue;
+            ModelCandidate cand;
+            memset(&cand, 0, sizeof(cand));
+            cand.count = 1;
+            cand.moves[0].x = x;
+            cand.moves[0].y = y;
+            cand.score = scoreModelPoint(x, y, color, cand.note, 48);
+            pushModelCandidate(cands, &count, maxCount, &cand);
+        }
+    }
+    return count;
+}
+
+int buildModelCandidates(int needMoves, ModelCandidate cands[], int maxCount, int color) {
+    if (!cands || maxCount <= 0) return 0;
+    if (needMoves <= 1) return collectModelSingleCandidates(cands, maxCount, color);
+
+    ModelCandidate firsts[MODEL_CANDIDATE_MAX];
+    int firstCount = collectModelSingleCandidates(firsts, MODEL_CANDIDATE_MAX, color);
+    int count = 0;
+    int firstLimit = firstCount < 10 ? firstCount : 10;
+    for (int i = 0; i < firstLimit; i++) {
+        int x1 = firsts[i].moves[0].x;
+        int y1 = firsts[i].moves[0].y;
+        if (!isLegalMoveForColor(x1, y1, color)) continue;
+        board[y1][x1] = color;
+        ModelCandidate seconds[MODEL_CANDIDATE_MAX];
+        int secondCount = collectModelSingleCandidates(seconds, MODEL_CANDIDATE_MAX, color);
+        int secondLimit = secondCount < 8 ? secondCount : 8;
+        for (int j = 0; j < secondLimit; j++) {
+            int x2 = seconds[j].moves[0].x;
+            int y2 = seconds[j].moves[0].y;
+            if (!isLegalMoveForColor(x2, y2, color)) continue;
+            ModelCandidate cand;
+            memset(&cand, 0, sizeof(cand));
+            cand.count = 2;
+            cand.moves[0] = firsts[i].moves[0];
+            cand.moves[1] = seconds[j].moves[0];
+            cand.score = firsts[i].score + seconds[j].score;
+            if (strcmp(firsts[i].note, "立即取胜") == 0 || strcmp(seconds[j].note, "立即取胜") == 0)
+                safeCopy(cand.note, "成阵组合", 48);
+            else if (strcmp(firsts[i].note, "必须防守") == 0 || strcmp(seconds[j].note, "必须防守") == 0)
+                safeCopy(cand.note, "攻守兼顾", 48);
+            else
+                safeCopy(cand.note, "双子布局", 48);
+            pushModelCandidate(cands, &count, maxCount, &cand);
+        }
+        board[y1][x1] = 0;
+    }
+    if (count == 0) return collectModelSingleCandidates(cands, maxCount, color);
+    return count;
+}
+
+void buildCandidateListText(const ModelCandidate cands[], int count, char* out, int maxLen) {
+    if (!out || maxLen <= 0) return;
+    out[0] = 0;
+    int pos = 0;
+    for (int i = 0; i < count && pos < maxLen - 1; i++) {
+        char line[160];
+        if (cands[i].count >= 2) {
+            snprintf(line, sizeof(line), "id=%d moves=[(%d,%d),(%d,%d)] score=%d note=%s\n",
+                     cands[i].id, cands[i].moves[0].x, cands[i].moves[0].y,
+                     cands[i].moves[1].x, cands[i].moves[1].y,
+                     cands[i].score, cands[i].note);
+        } else {
+            snprintf(line, sizeof(line), "id=%d move=(%d,%d) score=%d note=%s\n",
+                     cands[i].id, cands[i].moves[0].x, cands[i].moves[0].y,
+                     cands[i].score, cands[i].note);
+        }
+        int written = snprintf(out + pos, maxLen - pos, "%s", line);
+        if (written < 0 || written >= maxLen - pos) break;
+        pos += written;
+    }
+    out[maxLen - 1] = 0;
+}
+
+void buildModelPrompt(char* out, int maxLen, int needMoves, const ModelCandidate cands[], int candidateCount) {
+    char boardText[2048];
+    char candidateText[3072];
+    buildBoardText(boardText, sizeof(boardText));
+    buildCandidateListText(cands, candidateCount, candidateText, sizeof(candidateText));
+    const char* ruleText = "五子棋，连5获胜";
+    if (gameMode == MODE_CONNECT6) ruleText = "六子棋，连6获胜，黑方首回合1子，之后每回合2子";
+    else if (useForbidden) ruleText = "五子棋，连5获胜，黑棋禁手开启";
+    const char* colorText = (aiColor == 1) ? "黑棋B" : "白棋W";
+    const char* playerText = (playerColor == 1) ? "黑棋B" : "白棋W";
+    snprintf(out, maxLen,
+             "棋盘坐标为0到14，x从左到右，y从上到下。空点为.，黑棋为B，白棋为W。\n"
+             "规则：%s。\n"
+             "你执%s，玩家执%s。本回合你需要落%d子。\n"
+             "下面的候选全部由本地引擎验证为合法空点，并按战术分数从强到弱排序。\n"
+             "你必须只从候选id中选择一个，不要自造坐标；优先立即取胜，其次必须防守，再其次制造连续威胁。\n"
+             "只返回JSON，格式为 {\"id\":1}，不要解释。\n"
+             "当前棋盘：\n%s"
+             "候选：\n%s",
+             ruleText, colorText, playerText, needMoves, boardText, candidateText);
+    out[maxLen - 1] = 0;
+}
+
+int httpPostGlm(const char* apiKey, const char* payload, char* response, int maxLen, wchar_t* err, int errMax) {
+    if (!response || maxLen <= 0) return 0;
+    response[0] = 0;
+    if (err && errMax > 0) err[0] = 0;
+    HINTERNET hSession = WinHttpOpen(L"wuziqi-glm/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) {
+        if (err) wcscpy(err, L"WinHTTP 初始化失败");
+        return 0;
+    }
+    WinHttpSetTimeouts(hSession, 10000, 10000, 30000, 90000);
+    HINTERNET hConnect = WinHttpConnect(hSession, MODEL_API_HOST, INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (!hConnect) {
+        if (err) wcscpy(err, L"连接智谱接口失败");
+        WinHttpCloseHandle(hSession);
+        return 0;
+    }
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", MODEL_API_PATH, NULL,
+                                            WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                            WINHTTP_FLAG_SECURE);
+    if (!hRequest) {
+        if (err) wcscpy(err, L"创建模型请求失败");
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return 0;
+    }
+
+    wchar_t wApiKey[MODEL_API_KEY_MAX];
+    if (MultiByteToWideChar(CP_UTF8, 0, apiKey, -1, wApiKey, MODEL_API_KEY_MAX) <= 0) {
+        MultiByteToWideChar(CP_ACP, 0, apiKey, -1, wApiKey, MODEL_API_KEY_MAX);
+    }
+    wchar_t headers[768];
+    wsprintfW(headers, L"Content-Type: application/json\r\nAuthorization: Bearer %s\r\nAccept-Language: zh-CN,zh\r\n", wApiKey);
+    DWORD payloadLen = (DWORD)strlen(payload);
+    BOOL ok = WinHttpSendRequest(hRequest, headers, (DWORD)-1, (LPVOID)payload,
+                                 payloadLen, payloadLen, 0);
+    if (!ok || !WinHttpReceiveResponse(hRequest, NULL)) {
+        if (err) wcscpy(err, L"模型请求发送失败");
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return 0;
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusSize = sizeof(statusCode);
+    if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusSize,
+                            WINHTTP_NO_HEADER_INDEX)) {
+        if (statusCode < 200 || statusCode >= 300) {
+            if (err) wsprintfW(err, L"模型接口返回 HTTP %lu", statusCode);
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            WinHttpCloseHandle(hSession);
+            return 0;
+        }
+    }
+
+    DWORD total = 0;
+    while (1) {
+        DWORD available = 0;
+        if (!WinHttpQueryDataAvailable(hRequest, &available) || available == 0) break;
+        while (available > 0) {
+            char buffer[1024];
+            DWORD toRead = available > sizeof(buffer) ? sizeof(buffer) : available;
+            DWORD read = 0;
+            if (!WinHttpReadData(hRequest, buffer, toRead, &read) || read == 0) break;
+            if (total < (DWORD)(maxLen - 1)) {
+                DWORD copyLen = read;
+                if (copyLen > (DWORD)(maxLen - 1) - total) copyLen = (DWORD)(maxLen - 1) - total;
+                memcpy(response + total, buffer, copyLen);
+                total += copyLen;
+                response[total] = 0;
+            }
+            if (read >= available) break;
+            available -= read;
+        }
+    }
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    return response[0] != 0;
+}
+
+int extractAssistantContent(const char* json, char* out, int maxLen) {
+    if (!json || !out || maxLen <= 0) return 0;
+    out[0] = 0;
+    const char* p = strstr(json, "\"content\"");
+    if (!p) return 0;
+    p = strchr(p, ':');
+    if (!p) return 0;
+    p++;
+    while (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t') p++;
+    if (*p != '"') return 0;
+    p++;
+    int pos = 0;
+    while (*p && pos < maxLen - 1) {
+        if (*p == '"') break;
+        if (*p == '\\') {
+            p++;
+            if (!*p) break;
+            if (*p == '"' || *p == '\\' || *p == '/') out[pos++] = *p;
+            else if (*p == 'n') out[pos++] = '\n';
+            else if (*p == 'r') out[pos++] = '\r';
+            else if (*p == 't') out[pos++] = '\t';
+            else if (*p == 'u') {
+                p += 4;
+            }
+        } else {
+            out[pos++] = *p;
+        }
+        p++;
+    }
+    out[pos] = 0;
+    return out[0] != 0;
+}
+
+int readIntAfterColon(const char* p, int* value) {
+    const char* q = strchr(p, ':');
+    if (!q) return 0;
+    q++;
+    while (*q == ' ' || *q == '\t' || *q == '"' || *q == '[') q++;
+    int sign = 1;
+    if (*q == '-') { sign = -1; q++; }
+    if (!isdigit((unsigned char)*q)) return 0;
+    int v = 0;
+    while (isdigit((unsigned char)*q)) {
+        v = v * 10 + (*q - '0');
+        q++;
+    }
+    *value = v * sign;
+    return 1;
+}
+
+int normalizeModelCoord(int x, int y, int* outX, int* outY) {
+    if (x >= 0 && x < BOARD_SIZE && y >= 0 && y < BOARD_SIZE) {
+        *outX = x; *outY = y; return 1;
+    }
+    if (x >= 1 && x <= BOARD_SIZE && y >= 1 && y <= BOARD_SIZE) {
+        *outX = x - 1; *outY = y - 1; return 1;
+    }
+    return 0;
+}
+
+int parseModelMoves(const char* content, Move* moves, int maxMoves) {
+    int count = 0;
+    const char* p = content;
+    while ((p = strstr(p, "\"x\"")) != NULL && count < maxMoves) {
+        int x, y, nx, ny;
+        if (!readIntAfterColon(p, &x)) { p += 3; continue; }
+        const char* q = strstr(p, "\"y\"");
+        if (!q || !readIntAfterColon(q, &y)) { p += 3; continue; }
+        if (normalizeModelCoord(x, y, &nx, &ny)) {
+            moves[count].x = nx;
+            moves[count].y = ny;
+            count++;
+        }
+        p = q + 3;
+    }
+    if (count > 0) return count;
+
+    int nums[16];
+    int n = 0;
+    for (const char* q = content; *q && n < 16; q++) {
+        if ((*q == '-' && isdigit((unsigned char)q[1])) || isdigit((unsigned char)*q)) {
+            int sign = 1;
+            if (*q == '-') { sign = -1; q++; }
+            int v = 0;
+            while (isdigit((unsigned char)*q)) {
+                v = v * 10 + (*q - '0');
+                q++;
+            }
+            nums[n++] = v * sign;
+        }
+    }
+    for (int i = 0; i + 1 < n && count < maxMoves; i += 2) {
+        int nx, ny;
+        if (normalizeModelCoord(nums[i], nums[i + 1], &nx, &ny)) {
+            moves[count].x = nx;
+            moves[count].y = ny;
+            count++;
+        }
+    }
+    return count;
+}
+
+int parseModelCandidateId(const char* content, const ModelCandidate cands[], int candidateCount) {
+    if (!content || !cands || candidateCount <= 0) return -1;
+    const char* keys[] = {"\"id\"", "\"choice\"", "\"candidate\"", "\"候选\""};
+    for (int k = 0; k < 4; k++) {
+        const char* p = strstr(content, keys[k]);
+        if (!p) continue;
+        int id = -1;
+        if (readIntAfterColon(p, &id)) {
+            for (int i = 0; i < candidateCount; i++) if (cands[i].id == id) return i;
+        }
+    }
+
+    int nums[24];
+    int n = 0;
+    for (const char* q = content; *q && n < 24; q++) {
+        if ((*q == '-' && isdigit((unsigned char)q[1])) || isdigit((unsigned char)*q)) {
+            int sign = 1;
+            if (*q == '-') { sign = -1; q++; }
+            int v = 0;
+            while (isdigit((unsigned char)*q)) {
+                v = v * 10 + (*q - '0');
+                q++;
+            }
+            nums[n++] = v * sign;
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < candidateCount; j++) {
+            if (cands[j].id == nums[i]) return j;
+        }
+    }
+    return -1;
+}
+
+int isLegalMoveForColor(int x, int y, int color) {
+    if (!isInsideBoard(x, y)) return 0;
+    if (board[y][x] != 0) return 0;
+    if (gameMode == MODE_GOMOKU && useForbidden && color == 1 && isForbiddenMove(x, y, color)) return 0;
+    return 1;
+}
+
+int requestModelMoves(int needMoves, Move* moves, int* moveCount, wchar_t* err, int errMax) {
+    if (moveCount) *moveCount = 0;
+    char apiKey[MODEL_API_KEY_MAX];
+    if (!loadModelApiKey(apiKey, MODEL_API_KEY_MAX)) {
+        if (err) wcscpy(err, L"未找到当前账号的 API Key");
+        return 0;
+    }
+
+    ModelCandidate candidates[MODEL_CANDIDATE_MAX];
+    int candidateCount = buildModelCandidates(needMoves, candidates, MODEL_CANDIDATE_MAX, aiColor);
+    if (candidateCount <= 0) {
+        if (err) wcscpy(err, L"当前局面没有可用合法候选");
+        return 0;
+    }
+    ModelCandidate promptCandidates[MODEL_CANDIDATE_MAX];
+    int promptCount = 0;
+    int forcedTactic = candidates[0].score >= 400000000;
+    int startIndex = 0;
+    int takeCount = candidateCount;
+    if (difficulty == 1 && !forcedTactic && candidateCount > 8) {
+        startIndex = 5;
+        takeCount = candidateCount - startIndex;
+        if (takeCount > 8) takeCount = 8;
+    } else if (difficulty == 2 && candidateCount > 12) {
+        takeCount = 12;
+    }
+    if (startIndex >= candidateCount) startIndex = 0;
+    if (takeCount < 1) takeCount = 1;
+    for (int i = 0; i < takeCount && startIndex + i < candidateCount; i++) {
+        promptCandidates[promptCount] = candidates[startIndex + i];
+        promptCandidates[promptCount].id = promptCount + 1;
+        promptCount++;
+    }
+
+    char systemPrompt[1024];
+    char userPrompt[8192];
+    char escSystem[2048];
+    char escUser[12000];
+    char payload[16000];
+    char response[16384];
+    char content[4096];
+    snprintf(systemPrompt, sizeof(systemPrompt),
+             "你是%s五子棋对局引擎。你只能从用户给出的候选id中选择，不能自造坐标。只返回JSON。",
+             MODEL_NAME_TEXT);
+    buildModelPrompt(userPrompt, sizeof(userPrompt), needMoves, promptCandidates, promptCount);
+    jsonEscape(systemPrompt, escSystem, sizeof(escSystem));
+    jsonEscape(userPrompt, escUser, sizeof(escUser));
+    double temperature = (difficulty == 1) ? 0.35 : (difficulty == 2 ? 0.12 : 0.03);
+    snprintf(payload, sizeof(payload),
+             "{\"model\":\"%s\",\"messages\":[{\"role\":\"system\",\"content\":\"%s\"},"
+             "{\"role\":\"user\",\"content\":\"%s\"}],\"thinking\":{\"type\":\"enabled\"},"
+             "\"temperature\":%.2f,\"max_tokens\":128,\"stream\":false}",
+             MODEL_NAME_TEXT, escSystem, escUser, temperature);
+    payload[sizeof(payload) - 1] = 0;
+
+    int selected = -1;
+    if (httpPostGlm(apiKey, payload, response, sizeof(response), err, errMax) &&
+        extractAssistantContent(response, content, sizeof(content))) {
+        selected = parseModelCandidateId(content, promptCandidates, promptCount);
+    }
+    if (selected < 0) {
+        selected = 0;
+        if (err && errMax > 0 && err[0] == 0) wcscpy(err, L"已采用最强候选");
+    }
+
+    int count = promptCandidates[selected].count;
+    if (count > needMoves) count = needMoves;
+    for (int i = 0; i < count; i++) moves[i] = promptCandidates[selected].moves[i];
+    if (moveCount) *moveCount = count;
+    return 1;
+}
+
+int collectModelArrayNumbers(const char* content, const char* key, int nums[], int maxNums) {
+    if (!content || !key || !nums || maxNums <= 0) return 0;
+    const char* p = strstr(content, key);
+    if (!p) return 0;
+    p = strchr(p, '[');
+    if (!p) return 0;
+    int depth = 0;
+    int count = 0;
+    for (const char* q = p; *q; q++) {
+        if (*q == '[') {
+            depth++;
+            continue;
+        }
+        if (*q == ']') {
+            depth--;
+            if (depth <= 0) break;
+            continue;
+        }
+        if (depth > 0 && ((*q == '-' && isdigit((unsigned char)q[1])) || isdigit((unsigned char)*q))) {
+            int sign = 1;
+            if (*q == '-') { sign = -1; q++; }
+            int v = 0;
+            while (isdigit((unsigned char)*q)) {
+                v = v * 10 + (*q - '0');
+                q++;
+            }
+            if (count < maxNums) nums[count++] = v * sign;
+            q--;
+        }
+    }
+    return count;
+}
+
+int seedModelChallengeCoords(const int nums[], int numCount, int color, int* stoneCount) {
+    if (!nums || !stoneCount || numCount < 2 || (numCount % 2) != 0) return 0;
+    for (int i = 0; i + 1 < numCount; i += 2) {
+        int x, y;
+        if (!normalizeModelCoord(nums[i], nums[i + 1], &x, &y)) return 0;
+        if (board[y][x] != 0) return 0;
+        seedChallengeStone(x, y, color);
+        if (board[y][x] != color) return 0;
+        (*stoneCount)++;
+    }
+    return *stoneCount > 0;
+}
+
+int buildModelChallengeFromContent(const char* content, int index) {
+    int blackNums[180];
+    int whiteNums[180];
+    int blackNumCount = collectModelArrayNumbers(content, "\"black\"", blackNums, 180);
+    if (blackNumCount <= 0) blackNumCount = collectModelArrayNumbers(content, "black", blackNums, 180);
+    int whiteNumCount = collectModelArrayNumbers(content, "\"white\"", whiteNums, 180);
+    if (whiteNumCount <= 0) whiteNumCount = collectModelArrayNumbers(content, "white", whiteNums, 180);
+    if (blackNumCount <= 0 || whiteNumCount <= 0) return 0;
+
+    initBoard();
+    int blackCount = 0;
+    int whiteCount = 0;
+    if (!seedModelChallengeCoords(blackNums, blackNumCount, 1, &blackCount) ||
+        !seedModelChallengeCoords(whiteNums, whiteNumCount, 2, &whiteCount)) {
+        initBoard();
+        return 0;
+    }
+
+    int style = normalizeChallengeIndex(index);
+    int minBlack = 8 + style * 2 + (difficulty == 3 ? 2 : 0);
+    int minWhite = 6 + style * 2 + (difficulty == 3 ? 2 : 0);
+    int total = blackCount + whiteCount;
+    if (blackCount < minBlack || whiteCount < minWhite || total > 90 ||
+        abs(blackCount - whiteCount) > 10 ||
+        boardHasWin(1) || boardHasWin(2) ||
+        countImmediateWinsForColor(1) > 0 ||
+        countImmediateWinsForColor(2) > 0) {
+        initBoard();
+        return 0;
+    }
+
+    int minBlackScore = (difficulty == 1 ? 1000 : (difficulty == 2 ? 1800 : 4500)) + style * 600;
+    int blackBest = bestChallengeScoreForColor(1);
+    int whiteBest = bestChallengeScoreForColor(2);
+    if (blackBest < minBlackScore || (difficulty == 3 && whiteBest < 1200 + style * 600)) {
+        initBoard();
+        return 0;
+    }
+
+    rebuildChallengeHistory();
+    return 1;
+}
+
+int tryBuildModelChallengeBoard(int index) {
+    char apiKey[MODEL_API_KEY_MAX];
+    if (!loadModelApiKey(apiKey, MODEL_API_KEY_MAX)) return 0;
+
+    int style = normalizeChallengeIndex(index);
+    const char* styleText[CHALLENGE_COUNT] = {
+        "双线做杀，黑方需要找到制造多重威胁的关键手",
+        "攻守劫局，白方有反击压力，黑方需要先手化解并进攻",
+        "乱战复杂局，双方棋子较多，黑方要在混战中找到强制路线"
+    };
+    const char* diffText = "中等，关键手不明显但可通过计算找到";
+    if (difficulty == 1) diffText = "简单，黑方优势清晰，2到3手内可形成稳定杀势";
+    else if (difficulty == 3) diffText = "困难，白方防守和反击都很强，黑方需要连续精确进攻";
+
+    char systemPrompt[1024];
+    char userPrompt[8192];
+    char escSystem[2048];
+    char escUser[12000];
+    char payload[16000];
+    char response[20000];
+    char content[8192];
+    wchar_t err[128] = L"";
+
+    snprintf(systemPrompt, sizeof(systemPrompt),
+             "你是%s五子棋残局生成器。只输出可解析JSON，不要Markdown，不要解释。", MODEL_NAME_TEXT);
+    snprintf(userPrompt, sizeof(userPrompt),
+             "生成一个15x15五子棋残局，坐标x,y都使用0到14。黑棋B为玩家，白棋W为防守方，轮到黑棋。"
+             "残局类型：%s。难度：%s。限手：%d手。"
+             "要求：双方都不能已经连五；双方下一手都不能直接连五；棋子数量适中且集中；"
+             "黑棋必须有真实进攻路线，白棋必须有防守压力。"
+             "只返回JSON，格式严格为：{\"black\":[[x,y],[x,y]],\"white\":[[x,y],[x,y]]}。",
+             styleText[style], diffText, challengeLimits[style]);
+    jsonEscape(systemPrompt, escSystem, sizeof(escSystem));
+    jsonEscape(userPrompt, escUser, sizeof(escUser));
+    double temperature = (difficulty == 1) ? 0.38 : (difficulty == 2 ? 0.28 : 0.18);
+    snprintf(payload, sizeof(payload),
+             "{\"model\":\"%s\",\"messages\":[{\"role\":\"system\",\"content\":\"%s\"},"
+             "{\"role\":\"user\",\"content\":\"%s\"}],\"thinking\":{\"type\":\"enabled\"},"
+             "\"temperature\":%.2f,\"max_tokens\":900,\"stream\":false}",
+             MODEL_NAME_TEXT, escSystem, escUser, temperature);
+    payload[sizeof(payload) - 1] = 0;
+
+    if (!httpPostGlm(apiKey, payload, response, sizeof(response), err, 128)) return 0;
+    if (!extractAssistantContent(response, content, sizeof(content))) return 0;
+    return buildModelChallengeFromContent(content, style);
 }
 
 
@@ -1812,7 +2779,93 @@ int placeStone(int x, int y, int color) {
     return 1;
 }
 
+int findFallbackMoveForModel(int* outX, int* outY) {
+    AI_move(outX, outY);
+    if (isLegalMoveForColor(*outX, *outY, aiColor)) return 1;
+    int bestScore = -1;
+    if (findBestMoveForColor(aiColor, outX, outY, &bestScore) &&
+        isLegalMoveForColor(*outX, *outY, aiColor)) {
+        return 1;
+    }
+    for (int y = 0; y < BOARD_SIZE; y++) {
+        for (int x = 0; x < BOARD_SIZE; x++) {
+            if (isLegalMoveForColor(x, y, aiColor)) {
+                *outX = x;
+                *outY = y;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+int playModelTurn(int* lastCol, int* lastRow) {
+    int need = getTurnMoveNeed(aiColor);
+    Move modelMoves[2];
+    int modelMoveCount = 0;
+    int placed = 0;
+    int usedFallback = 0;
+    wchar_t err[128] = L"";
+    turnPlacedThisRound = 0;
+    setModelDuelStatus(L"GLM-5.1 正在落子...");
+
+    int ok = requestModelMoves(need, modelMoves, &modelMoveCount, err, 128);
+    if (ok) {
+        for (int i = 0; i < modelMoveCount && placed < need; i++) {
+            int x = modelMoves[i].x;
+            int y = modelMoves[i].y;
+            if (!isLegalMoveForColor(x, y, aiColor)) continue;
+            if (!placeStone(x, y, aiColor)) continue;
+            *lastCol = x;
+            *lastRow = y;
+            placed++;
+            turnPlacedThisRound++;
+            playSoundEffect(0);
+            if (checkWin(x, y, aiColor)) {
+                setModelDuelStatus(L"GLM-5.1 已成阵");
+                return 1;
+            }
+            if (isBoardFull()) {
+                setModelDuelStatus(L"棋盘已满");
+                return 2;
+            }
+        }
+        if (placed < need) wcscpy(err, L"候选落点异常，已补强");
+    }
+
+    while (placed < need) {
+        int x = -1, y = -1;
+        if (!findFallbackMoveForModel(&x, &y)) return -1;
+        if (!placeStone(x, y, aiColor)) return -1;
+        usedFallback = 1;
+        *lastCol = x;
+        *lastRow = y;
+        placed++;
+        turnPlacedThisRound++;
+        playSoundEffect(0);
+        if (checkWin(x, y, aiColor)) {
+            setModelDuelStatus(usedFallback ? L"模型异常，本地兜底成阵" : L"GLM-5.1 已成阵");
+            return 1;
+        }
+        if (isBoardFull()) {
+            setModelDuelStatus(L"棋盘已满");
+            return 2;
+        }
+    }
+
+    turnPlacedThisRound = 0;
+    if (usedFallback) {
+        setModelDuelStatus(err[0] ? err : L"GLM异常，采用强候选");
+    } else if (err[0]) {
+        setModelDuelStatus(err);
+    } else {
+        setModelDuelStatus(L"GLM-5.1 已选强候选");
+    }
+    return 0;
+}
+
 int playAITurn(int* lastCol, int* lastRow) {
+    if (!challengeMode && modelDuelMode) return playModelTurn(lastCol, lastRow);
     int need = getTurnMoveNeed(aiColor);
     turnPlacedThisRound = 0;
     for (int i = 0; i < need; i++) {
@@ -1856,7 +2909,9 @@ void inputScreen(const wchar_t* prompt, char* out, int maxLen, int isPassword) {
                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei");
     SendMessageW(edit, WM_SETFONT, (WPARAM)editFont, TRUE);
-    SendMessageW(edit, EM_LIMITTEXT, (WPARAM)(isPassword ? 31 : 16), 0);
+    int limitText = maxLen > 1 ? maxLen - 1 : 0;
+    if (limitText > 511) limitText = 511;
+    SendMessageW(edit, EM_LIMITTEXT, (WPARAM)limitText, 0);
     if (isPassword) SendMessageW(edit, EM_SETPASSWORDCHAR, L'*', 0);
     int needRedraw = 1;
 
@@ -1916,10 +2971,10 @@ void inputScreen(const wchar_t* prompt, char* out, int maxLen, int isPassword) {
         Sleep(10);
     }
     if (confirmed) {
-        wchar_t wideText[128] = {0};
-        char utf8Text[256] = {0};
-        GetWindowTextW(edit, wideText, 128);
-        int n = WideCharToMultiByte(CP_UTF8, 0, wideText, -1, utf8Text, 256, NULL, NULL);
+        wchar_t wideText[512] = {0};
+        char utf8Text[1024] = {0};
+        GetWindowTextW(edit, wideText, 512);
+        int n = WideCharToMultiByte(CP_UTF8, 0, wideText, -1, utf8Text, 1024, NULL, NULL);
         if (n > 0) safeCopy(out, utf8Text, maxLen);
         else out[0] = 0;
     } else {
@@ -1928,6 +2983,36 @@ void inputScreen(const wchar_t* prompt, char* out, int maxLen, int isPassword) {
     DestroyWindow(edit);
     DeleteObject(editFont);
     SetFocus(parent);
+}
+
+int promptAndSaveModelApiKey() {
+    if (isGuestUser()) {
+        MessageBoxW(GetHWnd(), L"游客登录不提供模型对局功能，请先登录或注册账号。", L"模型对局", MB_OK);
+        return 0;
+    }
+    char apiKey[MODEL_API_KEY_MAX] = {0};
+    inputScreen(L"请输入 GLM-5.1 API Key", apiKey, MODEL_API_KEY_MAX, 1);
+    trimLineEnd(apiKey);
+    if (strlen(apiKey) == 0) return 0;
+    if (!saveModelApiKey(apiKey)) {
+        MessageBoxW(GetHWnd(), L"API Key 保存失败，请确认当前目录可写。", L"模型对局", MB_OK);
+        return 0;
+    }
+    MessageBoxW(GetHWnd(), L"API Key 已保存到本机当前账号配置。", L"模型对局", MB_OK);
+    return 1;
+}
+
+int ensureModelApiKeyReady() {
+    if (isGuestUser()) {
+        modelDuelMode = 0;
+        MessageBoxW(GetHWnd(), L"游客登录不提供模型对局功能，请先登录或注册账号。", L"模型对局", MB_OK);
+        return 0;
+    }
+    if (!modelDuelMode || hasModelApiKey()) return 1;
+    int ans = MessageBoxW(GetHWnd(), L"模型对局需要先输入 GLM-5.1 API Key，是否现在输入？",
+                          L"模型对局", MB_YESNO);
+    if (ans != IDYES) return 0;
+    return promptAndSaveModelApiKey();
 }
 
 /* ===================== 登录界面 ===================== */
@@ -1979,9 +3064,7 @@ int loginScreen() {
                             UserInfo u;
                             if (findUser(name, &u)) {
                                 if (verifyUserPassword(&u, pwd)) {
-                                    safeCopy(currentUser, name, 64);
-                                    currentUserLevel = u.level;
-                                    currentUserExp = u.exp;
+                                    enterUserSession(name, u.level, u.exp);
                                     return 1;
                                 }
                                 MessageBoxW(GetHWnd(), L"密码错误", L"错误", MB_OK);
@@ -2017,8 +3100,7 @@ int loginScreen() {
                             safeCopy(u.pwdHash, hash, 33);
                             u.exp = 0; u.level = 1; u.regTime = time(NULL);
                             saveUser(&u);
-                            safeCopy(currentUser, name, 64);
-                            currentUserLevel = 1; currentUserExp = 0;
+                            enterUserSession(name, 1, 0);
                             MessageBoxW(GetHWnd(), L"注册成功", L"成功", MB_OK);
                             return 1;
                         } else if (i == 2) {
@@ -2072,8 +3154,7 @@ int loginScreen() {
                             MessageBoxW(GetHWnd(), L"密码已重置为 123456。", L"成功", MB_OK);
                             needRedraw = 1;
                         } else if (i == 4) {
-                            safeCopy(currentUser, "Guest", 64);
-                            currentUserLevel = 1; currentUserExp = 0;
+                            enterUserSession("Guest", 1, 0);
                             return 1;
                         }
                     }
@@ -2103,7 +3184,7 @@ int mainMenu() {
         if (needRedraw) {
             drawBackground(&imgMenu);
             drawCenterTextShadow(60, L"凡人修仙传", 44, ACCENT_GOLD);
-            drawCenterTextShadow(130, getModeName(), 36, TEXT_WHITE);
+            drawCenterTextShadow(126, modelDuelMode ? L"GLM-5.1" : L"天机对局", 34, TEXT_WHITE);
             for (int i = 0; i < 8; i++) drawButton(&btns[i], i == hover);
             FlushBatchDraw();
             needRedraw = 0;
@@ -2200,22 +3281,46 @@ int challengeMenu() {
 
 /* ===================== 游戏设置 ===================== */
 void gameSettings() {
-    const int MAX_BTN_COUNT = 9;
+    const int MAX_BTN_COUNT = 12;
     int guestMode = isGuestUser();
-    int btnCount = guestMode ? 8 : 9;
-    int logoutIndex = guestMode ? -1 : 7;
-    int backIndex = guestMode ? 7 : 8;
+    if (guestMode && modelDuelMode) clearModelDuelSession();
+    const int ACT_DIFFICULTY = 1;
+    const int ACT_RULE = 2;
+    const int ACT_OPPONENT = 3;
+    const int ACT_MODEL = 4;
+    const int ACT_API = 5;
+    const int ACT_FORBIDDEN = 6;
+    const int ACT_COLOR = 7;
+    const int ACT_HINT = 8;
+    const int ACT_SOUND = 9;
+    const int ACT_TIME = 10;
+    const int ACT_LOGOUT = 11;
+    const int ACT_BACK = 12;
+    int actions[MAX_BTN_COUNT];
+    int btnCount = 0;
+    actions[btnCount++] = ACT_DIFFICULTY;
+    actions[btnCount++] = ACT_RULE;
+    if (!guestMode) {
+        actions[btnCount++] = ACT_OPPONENT;
+        actions[btnCount++] = ACT_MODEL;
+        actions[btnCount++] = ACT_API;
+    }
+    actions[btnCount++] = ACT_FORBIDDEN;
+    actions[btnCount++] = ACT_COLOR;
+    actions[btnCount++] = ACT_HINT;
+    actions[btnCount++] = ACT_SOUND;
+    actions[btnCount++] = ACT_TIME;
+    if (!guestMode) actions[btnCount++] = ACT_LOGOUT;
+    actions[btnCount++] = ACT_BACK;
     Button btns[MAX_BTN_COUNT];
-    wchar_t btnTexts[MAX_BTN_COUNT][40];
+    wchar_t btnTexts[MAX_BTN_COUNT][64];
     for (int i = 0; i < btnCount; i++) {
-        btns[i].x = (WIN_WIDTH - 300) / 2;
-        btns[i].y = 152 + i * 58;
-        btns[i].w = 300;
-        btns[i].h = 46;
+        btns[i].x = (WIN_WIDTH - 360) / 2;
+        btns[i].y = 108 + i * 50;
+        btns[i].w = 360;
+        btns[i].h = 42;
         btns[i].text = btnTexts[i];
     }
-    if (!guestMode) wcscpy(btnTexts[logoutIndex], L"注销账号");
-    wcscpy(btnTexts[backIndex], L"返回");
     int hover = -1;
     int needRedraw = 1;
     ExMessage msg;
@@ -2226,17 +3331,51 @@ void gameSettings() {
     for (int i = 0; i < 4; i++) if (timeVals[i] == timeLimit) timeIdx = i;
     while (1) {
         if (needRedraw) {
-            wsprintfW(btnTexts[0], L"难度: %s", diffNames[difficulty]);
-            wsprintfW(btnTexts[1], L"模式: %s", getModeName());
-            wcscpy(btnTexts[2], gameMode == MODE_CONNECT6 ? L"禁手: 六子棋无禁手" : (useForbidden ? L"禁手: 开启" : L"禁手: 关闭"));
-            wcscpy(btnTexts[3], (playerColor == 1) ? L"执子: 玄黑(先)" : L"执子: 玉白(后)");
-            wcscpy(btnTexts[4], showHints ? L"心眼提示: 开启" : L"心眼提示: 关闭");
-            wcscpy(btnTexts[5], soundOn ? L"音效: 开启" : L"音效: 关闭");
-            wsprintfW(btnTexts[6], L"步时: %s", timeNames[timeIdx]);
+            for (int i = 0; i < btnCount; i++) {
+                switch (actions[i]) {
+                    case ACT_DIFFICULTY:
+                        wsprintfW(btnTexts[i], L"难度: %s", diffNames[difficulty]);
+                        break;
+                    case ACT_RULE:
+                        wsprintfW(btnTexts[i], L"规则: %s", getModeName());
+                        break;
+                    case ACT_OPPONENT:
+                        wcscpy(btnTexts[i], modelDuelMode ? L"对手: 模型对局" : L"对手: 本地天机");
+                        break;
+                    case ACT_MODEL:
+                        wcscpy(btnTexts[i], L"大模型: GLM-5.1");
+                        break;
+                    case ACT_API:
+                        wcscpy(btnTexts[i], hasModelApiKey() ? L"API Key: 已保存/点击更换" : L"API Key: 未设置/点击输入");
+                        break;
+                    case ACT_FORBIDDEN:
+                        wcscpy(btnTexts[i], gameMode == MODE_CONNECT6 ? L"禁手: 六子棋无禁手" : (useForbidden ? L"禁手: 开启" : L"禁手: 关闭"));
+                        break;
+                    case ACT_COLOR:
+                        wcscpy(btnTexts[i], (playerColor == 1) ? L"执子: 玄黑(先)" : L"执子: 玉白(后)");
+                        break;
+                    case ACT_HINT:
+                        wcscpy(btnTexts[i], showHints ? L"心眼提示: 开启" : L"心眼提示: 关闭");
+                        break;
+                    case ACT_SOUND:
+                        wcscpy(btnTexts[i], soundOn ? L"音效: 开启" : L"音效: 关闭");
+                        break;
+                    case ACT_TIME:
+                        wsprintfW(btnTexts[i], L"步时: %s", timeNames[timeIdx]);
+                        break;
+                    case ACT_LOGOUT:
+                        wcscpy(btnTexts[i], L"注销账号");
+                        break;
+                    default:
+                        wcscpy(btnTexts[i], L"返回");
+                        break;
+                }
+            }
             drawBackground(&imgMenu);
-            drawCenterTextShadow(62, L"游戏设置", 38, ACCENT_GOLD);
-            drawCenterText(116, L"六子棋: 黑先落1子，之后双方每回合落2子，先连6获胜。", 18, RGB(220, 205, 160));
-            for (int i = 0; i < btnCount; i++) drawSmallButton(&btns[i], i == hover, 18);
+            drawCenterTextShadow(42, L"游戏设置", 34, ACCENT_GOLD);
+            drawCenterText(84, guestMode ? L"游客模式不提供模型对局；登录账号后可配置 GLM-5.1。" :
+                (modelDuelMode ? L"模型对局使用当前账号本机保存的 GLM-5.1 API Key。" : L"六子棋: 黑先落1子，之后双方每回合落2子。"), 17, RGB(220, 205, 160));
+            for (int i = 0; i < btnCount; i++) drawSmallButton(&btns[i], i == hover, 17);
             FlushBatchDraw();
             needRedraw = 0;
         }
@@ -2255,21 +3394,42 @@ void gameSettings() {
             } else if (msg.message == WM_LBUTTONDOWN) {
                 for (int i = 0; i < btnCount; i++) {
                     if (hitButton(&btns[i], mx, my)) {
-                        if (i == 0) { difficulty++; if (difficulty > 3) difficulty = 1; needRedraw = 1; }
-                        else if (i == 1) {
+                        int action = actions[i];
+                        if (action == ACT_DIFFICULTY) { difficulty++; if (difficulty > 3) difficulty = 1; needRedraw = 1; }
+                        else if (action == ACT_RULE) {
                             gameMode = (gameMode == MODE_GOMOKU) ? MODE_CONNECT6 : MODE_GOMOKU;
                             if (gameMode == MODE_CONNECT6) useForbidden = 0;
                             needRedraw = 1;
                         }
-                        else if (i == 2) {
+                        else if (action == ACT_OPPONENT) {
+                            if (!modelDuelMode) {
+                                if (!hasModelApiKey() && !promptAndSaveModelApiKey()) {
+                                    needRedraw = 1; continue;
+                                }
+                                modelDuelMode = 1;
+                                resetModelDuelScore();
+                            } else {
+                                modelDuelMode = 0;
+                            }
+                            needRedraw = 1;
+                        }
+                        else if (action == ACT_MODEL) {
+                            MessageBoxW(GetHWnd(), L"当前模型固定为 GLM-5.1。后续可在这里扩展更多模型。", L"模型对局", MB_OK);
+                            needRedraw = 1;
+                        }
+                        else if (action == ACT_API) {
+                            promptAndSaveModelApiKey();
+                            needRedraw = 1;
+                        }
+                        else if (action == ACT_FORBIDDEN) {
                             if (gameMode == MODE_GOMOKU) useForbidden = !useForbidden;
                             needRedraw = 1;
                         }
-                        else if (i == 3) { playerColor = 3 - playerColor; needRedraw = 1; }
-                        else if (i == 4) { showHints = !showHints; needRedraw = 1; }
-                        else if (i == 5) { soundOn = !soundOn; needRedraw = 1; }
-                        else if (i == 6) { timeIdx = (timeIdx + 1) % 4; timeLimit = timeVals[timeIdx]; needRedraw = 1; }
-                        else if (!guestMode && i == logoutIndex) {
+                        else if (action == ACT_COLOR) { playerColor = 3 - playerColor; needRedraw = 1; }
+                        else if (action == ACT_HINT) { showHints = !showHints; needRedraw = 1; }
+                        else if (action == ACT_SOUND) { soundOn = !soundOn; needRedraw = 1; }
+                        else if (action == ACT_TIME) { timeIdx = (timeIdx + 1) % 4; timeLimit = timeVals[timeIdx]; needRedraw = 1; }
+                        else if (action == ACT_LOGOUT) {
                             char pwd[64] = {0};
                             UserInfo u;
                             if (!findUser(currentUser, &u)) {
@@ -2288,9 +3448,7 @@ void gameSettings() {
                                 safeCopy(deletedName, currentUser, 64);
                                 if (deleteUserAccount(deletedName)) {
                                     MessageBoxW(GetHWnd(), L"账号已注销。", L"成功", MB_OK);
-                                    safeCopy(currentUser, "Guest", 64);
-                                    currentUserLevel = 1;
-                                    currentUserExp = 0;
+                                    enterUserSession("Guest", 1, 0);
                                     loginScreen();
                                     return;
                                 }
@@ -2298,7 +3456,7 @@ void gameSettings() {
                             }
                             needRedraw = 1;
                         }
-                        else if (i == backIndex) return;
+                        else if (action == ACT_BACK) return;
                     }
                 }
             }
@@ -2309,10 +3467,6 @@ void gameSettings() {
 
 /* ===================== 个人数据 ===================== */
 void showPersonalStats() {
-    int wins[4] = {0}, losses[4] = {0}, draws[4] = {0};
-    int modeWins[2] = {0}, modeGames[2] = {0};
-    int totalGames = 0;
-    int currentStreak = 0, bestStreak = 0;
     UserInfo accountInfo;
     int hasAccount = (strcmp(currentUser, "Guest") != 0 && findUser(currentUser, &accountInfo));
     wchar_t regText[64] = L"游客模式";
@@ -2322,71 +3476,64 @@ void showPersonalStats() {
         if (tmv) wsprintfW(regText, L"%04d-%02d-%02d", tmv->tm_year + 1900, tmv->tm_mon + 1, tmv->tm_mday);
         else wcscpy(regText, L"未知");
     }
-    FILE* fp = fopen("stats.dat", "r");
-    if (fp) {
-        char line[256];
-        while (fgets(line, sizeof(line), fp)) {
-            char user[64];
-            int diff, result, t = 0, steps = 0, mode = MODE_GOMOKU;
-            if (sscanf(line, "%63s %d %d %d %d %d", user, &diff, &result, &t, &steps, &mode) >= 3) {
-                if (strcmp(user, currentUser) != 0) continue;
-                if (diff < 1 || diff > 3) continue;
-                if (result == 1) wins[diff]++;
-                else if (result == 0) losses[diff]++;
-                else draws[diff]++;
-                if (mode != MODE_GOMOKU && mode != MODE_CONNECT6) mode = MODE_GOMOKU;
-                modeGames[mode]++;
-                if (result == 1) modeWins[mode]++;
-                if (result == 1) {
-                    currentStreak++;
-                    if (currentStreak > bestStreak) bestStreak = currentStreak;
-                } else {
-                    currentStreak = 0;
-                }
-                totalGames++;
-            }
-        }
-        fclose(fp);
-    }
-    Button btnReset, btnBack;
-    btnReset.x = (WIN_WIDTH - BTN_W) / 2; btnReset.y = 600; btnReset.w = BTN_W; btnReset.h = BTN_H; btnReset.text = L"重置数据";
-    btnBack.x = (WIN_WIDTH - BTN_W) / 2; btnBack.y = 670; btnBack.w = BTN_W; btnBack.h = BTN_H; btnBack.text = L"返回";
+    Button btnTianji, btnModel, btnReset, btnBack;
+    btnTianji.x = WIN_WIDTH / 2 - 300; btnTianji.y = 108; btnTianji.w = 180; btnTianji.h = 42; btnTianji.text = L"天机数据";
+    btnModel.x = WIN_WIDTH / 2 - 100; btnModel.y = 108; btnModel.w = 180; btnModel.h = 42; btnModel.text = L"GLM-5.1";
+    btnReset.x = WIN_WIDTH / 2 + 100; btnReset.y = 108; btnReset.w = 180; btnReset.h = 42; btnReset.text = L"重置本页";
+    btnBack.x = WIN_WIDTH / 2 + 300; btnBack.y = 108; btnBack.w = 180; btnBack.h = 42; btnBack.text = L"返回";
+    Button* btns[4] = {&btnTianji, &btnModel, &btnReset, &btnBack};
+    int page = 0;
     int hover = -1;
     int needRedraw = 1;
     ExMessage msg;
-    HDC hdc = GetImageHDC(NULL);
     while (1) {
         if (needRedraw) {
+            StatSummary summary;
+            loadUserStatSummary(page, &summary);
             drawBackground(&imgMenu);
-            drawCenterTextShadow(60, L"个人数据", 38, ACCENT_GOLD);
-            SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, TEXT_WHITE);
-            settextstyle(24, 0, "SimHei");
+            drawCenterTextShadow(48, page ? L"个人数据 · GLM-5.1" : L"个人数据 · 天机", 36, ACCENT_GOLD);
+            for (int i = 0; i < 4; i++) drawSmallButton(btns[i], hover == i || (page == i && i < 2), 18);
+
+            int left = 150, top = 185, width = WIN_WIDTH - 300, height = 410;
+            setfillcolor(RGB(14, 14, 22));
+            setlinecolor(PANEL_BORDER);
+            fillroundrect(left, top, left + width, top + height, 14, 14);
+            roundrect(left + 8, top + 8, left + width - 8, top + height - 8, 12, 12);
             const wchar_t* diffName[4] = {L"", L"简单", L"中等", L"困难"};
-            int y = 150;
+            int y = top + 36;
             wchar_t buf[256];
             wchar_t wuser[64]; asciiToWchar(currentUser, wuser, 64);
             wsprintfW(buf, L"道友: %s    注册: %s", wuser, regText);
-            drawCenterText(y, buf, 22, ACCENT_GOLD); y += 45;
+            drawBoxCenterText(left, width, y, buf, 22, ACCENT_GOLD); y += 42;
             wsprintfW(buf, L"境界: %s    经验: %d", getXianLevelName(currentUserExp), currentUserExp);
-            drawCenterText(y, buf, 22, TEXT_WHITE); y += 45;
-            wsprintfW(buf, L"总对局: %d", totalGames);
-            drawCenterText(y, buf, 22, TEXT_WHITE); y += 45;
+            drawBoxCenterText(left, width, y, buf, 22, TEXT_WHITE); y += 46;
+
+            int col1 = left + 90;
+            int col2 = left + width / 2 + 40;
+            wsprintfW(buf, L"总对局: %d", summary.totalGames);
+            drawLeftText(col1, y, buf, 22, TEXT_WHITE);
+            wsprintfW(buf, L"当前连胜: %d    最高连胜: %d", summary.currentStreak, summary.bestStreak);
+            drawLeftText(col2, y, buf, 22, ACCENT_GOLD);
+            y += 52;
+
+            drawLeftText(col1, y, L"难度战绩", 22, ACCENT_GOLD);
+            drawLeftText(col2, y, page ? L"模型规则统计" : L"规则统计", 22, ACCENT_GOLD);
+            y += 40;
             for (int d = 1; d <= 3; d++) {
-                wsprintfW(buf, L"%s:  胜 %d   负 %d   平 %d", diffName[d], wins[d], losses[d], draws[d]);
-                drawCenterText(y, buf, 22, TEXT_WHITE);
-                y += 42;
+                wsprintfW(buf, L"%s:  胜 %d   负 %d   平 %d", diffName[d], summary.wins[d], summary.losses[d], summary.draws[d]);
+                drawLeftText(col1, y, buf, 20, TEXT_WHITE);
+                y += 36;
             }
-            wsprintfW(buf, L"五子棋: %d局/%d胜    六子棋: %d局/%d胜", modeGames[0], modeWins[0], modeGames[1], modeWins[1]);
-            drawCenterText(y, buf, 20, TEXT_WHITE); y += 38;
-            wsprintfW(buf, L"当前连胜: %d    最高连胜: %d", currentStreak, bestStreak);
-            drawCenterText(y, buf, 20, ACCENT_GOLD); y += 38;
-            if (totalGames >= 20) drawCenterText(y, L"成就: 棋痴入道", 20, RGB(120, 235, 185));
-            else if (bestStreak >= 3) drawCenterText(y, L"成就: 三胜凝气", 20, RGB(120, 235, 185));
-            else if (modeWins[1] > 0) drawCenterText(y, L"成就: 六连初悟", 20, RGB(120, 235, 185));
-            else drawCenterText(y, L"成就: 尚待破局", 20, RGB(220, 205, 160));
-            drawButton(&btnReset, hover == 0);
-            drawButton(&btnBack, hover == 1);
+            int ry = top + 230;
+            wsprintfW(buf, L"五子棋: %d局 / %d胜", summary.modeGames[0], summary.modeWins[0]);
+            drawLeftText(col2, ry, buf, 20, TEXT_WHITE); ry += 38;
+            wsprintfW(buf, L"六子棋: %d局 / %d胜", summary.modeGames[1], summary.modeWins[1]);
+            drawLeftText(col2, ry, buf, 20, TEXT_WHITE); ry += 46;
+            if (summary.totalGames >= 20) wcscpy(buf, page ? L"称号: 模型磨砺者" : L"称号: 棋痴入道");
+            else if (summary.bestStreak >= 3) wcscpy(buf, page ? L"称号: 三胜破算" : L"称号: 三胜凝气");
+            else if (summary.modeWins[1] > 0) wcscpy(buf, L"称号: 六连初悟");
+            else wcscpy(buf, L"称号: 尚待破局");
+            drawLeftText(col2, ry, buf, 20, RGB(120, 235, 185));
             FlushBatchDraw();
             needRedraw = 0;
         }
@@ -2396,19 +3543,16 @@ void showPersonalStats() {
             if (msg.message == WM_MOUSEMOVE) {
                 int oldHover = hover;
                 hover = -1;
-                if (hitButton(&btnReset, mx, my)) hover = 0;
-                else if (hitButton(&btnBack, mx, my)) hover = 1;
+                for (int i = 0; i < 4; i++) if (hitButton(btns[i], mx, my)) { hover = i; break; }
                 if (hover != oldHover) needRedraw = 1;
             } else if (msg.message == WM_LBUTTONDOWN) {
-                if (hitButton(&btnReset, mx, my)) {
-                    resetUserStats();
-                    wins[1] = wins[2] = wins[3] = 0; losses[1] = losses[2] = losses[3] = 0; draws[1] = draws[2] = draws[3] = 0;
-                    modeWins[0] = modeWins[1] = modeGames[0] = modeGames[1] = 0;
-                    totalGames = 0; currentStreak = 0; bestStreak = 0;
-                    MessageBoxW(GetHWnd(), L"数据已重置", L"提示", MB_OK);
+                if (hitButton(&btnTianji, mx, my)) { page = 0; needRedraw = 1; }
+                else if (hitButton(&btnModel, mx, my)) { page = 1; needRedraw = 1; }
+                else if (hitButton(&btnReset, mx, my)) {
+                    resetUserStatsByModelFlag(page);
+                    MessageBoxW(GetHWnd(), page ? L"GLM-5.1 数据已重置" : L"天机数据已重置", L"提示", MB_OK);
                     needRedraw = 1;
-                }
-                if (hitButton(&btnBack, mx, my)) return;
+                } else if (hitButton(&btnBack, mx, my)) return;
             }
         }
         Sleep(10);
@@ -2418,19 +3562,18 @@ void showPersonalStats() {
 /* ===================== 排行榜 ===================== */
 struct PlayerStat { char name[64]; int wins, losses, draws; };
 
-void showLeaderboard() {
-    PlayerStat stats[100];
+int buildLeaderboardStats(PlayerStat stats[], int maxCount, int modelPage) {
     int count = 0;
     UserInfo users[100];
     int userCount = loadUsers(users, 100);
-    for (int i = 0; i < userCount && count < 100; i++) {
+    for (int i = 0; i < userCount && count < maxCount; i++) {
         safeCopy(stats[count].name, users[i].name, 64);
         stats[count].wins = 0; stats[count].losses = 0; stats[count].draws = 0;
         count++;
     }
     int found = 0;
     for (int i = 0; i < count; i++) if (strcmp(stats[i].name, currentUser) == 0) { found = 1; break; }
-    if (!found && count < 100 && strcmp(currentUser, "Guest") != 0) {
+    if (!found && count < maxCount && strcmp(currentUser, "Guest") != 0) {
         safeCopy(stats[count].name, currentUser, 64);
         stats[count].wins = 0; stats[count].losses = 0; stats[count].draws = 0;
         count++;
@@ -2439,19 +3582,17 @@ void showLeaderboard() {
     if (fp) {
         char line[256];
         while (fgets(line, sizeof(line), fp)) {
-            char user[64]; int diff, result, t = 0, steps = 0, mode = MODE_GOMOKU;
-            int parsed = sscanf(line, "%63s %d %d %d %d %d", user, &diff, &result, &t, &steps, &mode);
-            if (parsed >= 3) {
-                if (diff != 3) continue;
-                if (parsed < 6) mode = MODE_GOMOKU;
-                if (mode != gameMode) continue;
-                for (int i = 0; i < count; i++) {
-                    if (strcmp(stats[i].name, user) == 0) {
-                        if (result == 1) stats[i].wins++;
-                        else if (result == 0) stats[i].losses++;
-                        else stats[i].draws++;
-                        break;
-                    }
+            StatRecord rec;
+            if (!parseStatLine(line, &rec)) continue;
+            if (rec.difficulty != 3) continue;
+            if (rec.modelFlag != modelPage) continue;
+            if (!modelPage && rec.mode != gameMode) continue;
+            for (int i = 0; i < count; i++) {
+                if (strcmp(stats[i].name, rec.user) == 0) {
+                    if (rec.result == 1) stats[i].wins++;
+                    else if (rec.result == 0) stats[i].losses++;
+                    else stats[i].draws++;
+                    break;
                 }
             }
         }
@@ -2471,30 +3612,43 @@ void showLeaderboard() {
             }
         }
     }
-    Button backBtn;
-    backBtn.x = (WIN_WIDTH - BTN_W) / 2; backBtn.y = 640; backBtn.w = BTN_W; backBtn.h = BTN_H; backBtn.text = L"返回";
+    return count;
+}
+
+void showLeaderboard() {
+    PlayerStat stats[100];
+    int page = 0;
+    Button btnTianji, btnModel, backBtn;
+    btnTianji.x = WIN_WIDTH / 2 - 330; btnTianji.y = WIN_HEIGHT - 92; btnTianji.w = 200; btnTianji.h = 46; btnTianji.text = L"天机困难榜";
+    btnModel.x = WIN_WIDTH / 2 - 100; btnModel.y = WIN_HEIGHT - 92; btnModel.w = 200; btnModel.h = 46; btnModel.text = L"GLM-5.1榜";
+    backBtn.x = WIN_WIDTH / 2 + 130; backBtn.y = WIN_HEIGHT - 92; backBtn.w = 200; backBtn.h = 46; backBtn.text = L"返回";
+    Button* btns[3] = {&btnTianji, &btnModel, &backBtn};
     int hover = -1;
     int needRedraw = 1;
     ExMessage msg;
-    HDC hdc = GetImageHDC(NULL);
     while (1) {
         if (needRedraw) {
+            int count = buildLeaderboardStats(stats, 100, page);
             drawBackground(&imgMenu);
             wchar_t title[80];
-            wsprintfW(title, L"排行榜（%s · 困难）", getModeName());
-            drawCenterTextShadow(30, title, 38, ACCENT_GOLD);
-            SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, TEXT_WHITE);
-            settextstyle(20, 0, "SimHei");
-            drawLeftText(60, 85, L"排名", 20, TEXT_WHITE);
-            drawLeftText(150, 85, L"道友", 20, TEXT_WHITE);
-            drawLeftText(340, 85, L"胜", 20, TEXT_WHITE);
-            drawLeftText(430, 85, L"负", 20, TEXT_WHITE);
-            drawLeftText(520, 85, L"平", 20, TEXT_WHITE);
-            drawLeftText(620, 85, L"胜率", 20, TEXT_WHITE);
-            drawLeftText(740, 85, L"境界", 20, TEXT_WHITE);
-            int y = 118;
-            int showCount = count < 14 ? count : 14;
+            if (page) wcscpy(title, L"GLM-5.1 困难排行榜");
+            else wsprintfW(title, L"天机困难排行榜（%s）", getModeName());
+            drawCenterTextShadow(34, title, 38, ACCENT_GOLD);
+
+            int left = 120, top = 94, width = WIN_WIDTH - 240, height = WIN_HEIGHT - 215;
+            setfillcolor(RGB(14, 14, 22));
+            setlinecolor(PANEL_BORDER);
+            fillroundrect(left, top, left + width, top + height, 14, 14);
+            roundrect(left + 8, top + 8, left + width - 8, top + height - 8, 12, 12);
+            drawLeftText(left + 42, top + 32, L"排名", 20, ACCENT_GOLD);
+            drawLeftText(left + 150, top + 32, L"道友", 20, ACCENT_GOLD);
+            drawLeftText(left + 390, top + 32, L"胜", 20, ACCENT_GOLD);
+            drawLeftText(left + 500, top + 32, L"负", 20, ACCENT_GOLD);
+            drawLeftText(left + 610, top + 32, L"平", 20, ACCENT_GOLD);
+            drawLeftText(left + 730, top + 32, L"胜率", 20, ACCENT_GOLD);
+            drawLeftText(left + 875, top + 32, L"境界", 20, ACCENT_GOLD);
+            int y = top + 74;
+            int showCount = count < 15 ? count : 15;
             for (int i = 0; i < showCount; i++) {
                 wchar_t wname[64]; asciiToWchar(stats[i].name, wname, 64);
                 wchar_t buf[32];
@@ -2502,17 +3656,17 @@ void showLeaderboard() {
                 double rate = total > 0 ? (double)stats[i].wins / total * 100.0 : 0.0;
                 UserInfo u; int exp = 0;
                 if (findUser(stats[i].name, &u)) exp = u.exp;
-                wsprintfW(buf, L"%d", i + 1); drawLeftText(60, y, buf, 18, TEXT_WHITE);
-                drawLeftText(150, y, wname, 18, TEXT_WHITE);
-                wsprintfW(buf, L"%d", stats[i].wins); drawLeftText(340, y, buf, 18, TEXT_WHITE);
-                wsprintfW(buf, L"%d", stats[i].losses); drawLeftText(430, y, buf, 18, TEXT_WHITE);
-                wsprintfW(buf, L"%d", stats[i].draws); drawLeftText(520, y, buf, 18, TEXT_WHITE);
-                wsprintfW(buf, L"%.1f%%", rate); drawLeftText(620, y, buf, 18, TEXT_WHITE);
+                wsprintfW(buf, L"%d", i + 1); drawLeftText(left + 42, y, buf, 18, TEXT_WHITE);
+                drawLeftText(left + 150, y, wname, 18, TEXT_WHITE);
+                wsprintfW(buf, L"%d", stats[i].wins); drawLeftText(left + 390, y, buf, 18, TEXT_WHITE);
+                wsprintfW(buf, L"%d", stats[i].losses); drawLeftText(left + 500, y, buf, 18, TEXT_WHITE);
+                wsprintfW(buf, L"%d", stats[i].draws); drawLeftText(left + 610, y, buf, 18, TEXT_WHITE);
+                wsprintfW(buf, L"%.1f%%", rate); drawLeftText(left + 730, y, buf, 18, TEXT_WHITE);
                 const wchar_t* realm = getXianLevelName(exp);
-                drawLeftText(740, y, realm, 18, TEXT_WHITE);
+                drawLeftText(left + 875, y, realm, 18, TEXT_WHITE);
                 y += 34;
             }
-            drawButton(&backBtn, hover >= 0);
+            for (int i = 0; i < 3; i++) drawSmallButton(btns[i], hover == i || (page == i && i < 2), 18);
             FlushBatchDraw();
             needRedraw = 0;
         }
@@ -2522,10 +3676,12 @@ void showLeaderboard() {
             if (msg.message == WM_MOUSEMOVE) {
                 int oldHover = hover;
                 hover = -1;
-                if (hitButton(&backBtn, mx, my)) hover = 0;
+                for (int i = 0; i < 3; i++) if (hitButton(btns[i], mx, my)) { hover = i; break; }
                 if (hover != oldHover) needRedraw = 1;
             } else if (msg.message == WM_LBUTTONDOWN) {
-                if (hitButton(&backBtn, mx, my)) return;
+                if (hitButton(&btnTianji, mx, my)) { page = 0; needRedraw = 1; }
+                else if (hitButton(&btnModel, mx, my)) { page = 1; needRedraw = 1; }
+                else if (hitButton(&backBtn, mx, my)) return;
             }
         }
         Sleep(10);
@@ -2535,6 +3691,11 @@ void showLeaderboard() {
 
 /* ===================== 游戏主循环 ===================== */
 void startGame(int isContinue) {
+    if (!challengeMode && modelDuelMode && !ensureModelApiKeyReady()) {
+        gameRunning = 0;
+        return;
+    }
+    if (!challengeMode && modelDuelMode && !isContinue) resetModelDuelScore();
     aiColor = 3 - playerColor;
     int hoverCol = -1, hoverRow = -1;
     int lastCol = -1, lastRow = -1;
@@ -2585,8 +3746,8 @@ void startGame(int isContinue) {
     int by = WIN_HEIGHT - 90;
     btnUndo.x = startX; btnUndo.y = by; btnUndo.w = bw; btnUndo.h = bh; btnUndo.text = L"悔棋(R)";
     btnGiveUp.x = startX + bw + gap; btnGiveUp.y = by; btnGiveUp.w = bw; btnGiveUp.h = bh; btnGiveUp.text = L"认输";
-    btnDraw.x = startX + 2*(bw+gap); btnDraw.y = by; btnDraw.w = bw; btnDraw.h = bh; btnDraw.text = challengeMode ? L"提示(H)" : L"求和";
-    btnSave.x = startX + 3*(bw+gap); btnSave.y = by; btnSave.w = bw; btnSave.h = bh; btnSave.text = challengeMode ? L"换局" : L"存档";
+    btnDraw.x = startX + 2*(bw+gap); btnDraw.y = by; btnDraw.w = bw; btnDraw.h = bh; btnDraw.text = challengeMode ? L"提示(H)" : (modelDuelMode ? L"清比分" : L"求和");
+    btnSave.x = startX + 3*(bw+gap); btnSave.y = by; btnSave.w = bw; btnSave.h = bh; btnSave.text = (challengeMode || modelDuelMode) ? L"换局" : L"存档";
     btnBack.x = startX + 4*(bw+gap); btnBack.y = by; btnBack.w = bw; btnBack.h = bh; btnBack.text = L"返回";
     Button* bottomBtns[5] = {&btnUndo, &btnGiveUp, &btnDraw, &btnSave, &btnBack};
     int btnHover = -1;
@@ -2704,6 +3865,10 @@ void startGame(int isContinue) {
                             showHints = 1;
                             doRedraw = 1; continue;
                         }
+                        if (modelDuelMode) {
+                            resetModelDuelScore();
+                            doRedraw = 1; continue;
+                        }
                         if (!gameOver && !aiThinking) {
                             if (drawOffered) {
                                 MessageBoxW(GetHWnd(), L"已提出求和，不可重复申请。", L"提示", MB_OK);
@@ -2736,6 +3901,30 @@ void startGame(int isContinue) {
                             loadChallengeBoard(challengeIndex);
                             gameOver = 0; result = -1; lastCol = -1; lastRow = -1;
                             currentTurn = playerColor; drawOffered = 0;
+                            doRedraw = 1; continue;
+                        }
+                        if (modelDuelMode) {
+                            int ans = gameOver ? IDYES : MessageBoxW(GetHWnd(), L"换一局？当前局不会计入比分。", L"模型对局", MB_YESNO);
+                            if (ans == IDYES) {
+                                initBoard();
+                                setModelDuelStatus(L"GLM-5.1 已就绪");
+                                gameOver = 0; result = -1; lastCol = -1; lastRow = -1;
+                                currentTurn = playerColor; drawOffered = 0;
+                                if (playerColor == 2) {
+                                    aiThinking = 1;
+                                    redrawScene(-1, -1, lastCol, lastRow, gameOver, result);
+                                    drawInfoPanel(gameOver, result, currentTurn);
+                                    for (int i = 0; i < 5; i++) drawSmallButton(bottomBtns[i], -1, 16);
+                                    drawStatusBar(L""); FlushBatchDraw();
+                                    Sleep(300);
+                                    int aiResult = playAITurn(&lastCol, &lastRow);
+                                    if (aiResult == 1) { gameOver = 1; result = 0; saveStats(0); }
+                                    else if (aiResult == 2) { gameOver = 1; result = 2; saveStats(2); }
+                                    currentTurn = playerColor;
+                                    stepStartTime = GetTickCount();
+                                    aiThinking = 0;
+                                }
+                            }
                             doRedraw = 1; continue;
                         }
                         if (gameOver) {
@@ -2773,6 +3962,7 @@ void startGame(int isContinue) {
                 if (gameOver) {
                     if (challengeMode) loadChallengeBoard(challengeIndex);
                     else initBoard();
+                    if (!challengeMode && modelDuelMode) setModelDuelStatus(L"GLM-5.1 已就绪");
                     gameOver = 0; result = -1; lastCol = -1; lastRow = -1; drawOffered = 0;
                     currentTurn = playerColor;
                     if (!challengeMode && playerColor == 2) {
