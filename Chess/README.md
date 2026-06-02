@@ -6,11 +6,11 @@ EasyX 图形库实现的古风五子棋/六子棋小游戏，包含账号系统�
 
 以下图片展示程序运行中的登录入口、对局界面和个人数据页面。
 
-![登录入口](Chess/image/runtime-login.png)
+![登录入口](image/runtime-login.png)
 
-![对局界面](Chess/image/runtime-game.png)
+![对局界面](image/runtime-game.png)
 
-![个人数据](Chess/image/runtime-stats.png)
+![个人数据](image/runtime-stats.png)
 
 ## 运行环境
 
@@ -19,6 +19,24 @@ EasyX 图形库实现的古风五子棋/六子棋小游戏，包含账号系统�
 - EasyX 图形库
 
 ## 编译
+
+推荐直接使用根目录脚本：
+
+```powershell
+.\run.bat
+```
+
+该脚本会编译根目录 `1.exe`。程序按 exe 所在目录读取资源，所以根目录的 `1.exe` 会直接读取根目录的四张背景图和运行数据。
+
+只构建不运行：
+
+```powershell
+.\build.bat
+```
+
+如果你的 PowerShell 允许本地脚本，也可以使用 `.\run.ps1` 或 `.\build.ps1`。
+
+手动编译：
 
 ```powershell
 g++ 1.cpp -o 1.exe -leasyx -lgdi32 -limm32 -lmsimg32 -lole32 -loleaut32 -lwinhttp -lcrypt32 -finput-charset=UTF-8 -fexec-charset=UTF-8
@@ -32,10 +50,17 @@ g++ 1.cpp -o 1.exe -leasyx -lgdi32 -limm32 -lmsimg32 -lole32 -loleaut32 -lwinhtt
 
 ## 运行数据
 
+程序会按 exe 所在目录解析背景图和运行数据。移动发布时，请把 `1.exe` 与以下资源放在同一个文件夹：
+
+- `bg_login.png`
+- `bg_menu.png`
+- `bg_game.png`
+- `bg_win.png`
+
 以下数据文件不用提前放进项目：
 
 - `admin_key.txt`：程序启动时会自动创建空文件；如果要使用“忘记密码”功能，需要手动在文件中写入管理员密匙。
 - `users.dat`：注册账号后自动生成。
 - `stats.dat`：产生对局结果后自动生成。
 - `save_*.dat`：点击存档后自动生成；旧版 `save.dat` 只用于兼容读取，新版本不会主动生成。
-- `glm_key_*.dat`：开启“模型对局”并输入 GLM-5.1 API Key 后自动生成，只保存在本机当前 Windows 用户下。
+- `glm_key_*.dat`：开启“模型对局”并输入 GLM-5.1 API Key 后自动生成，保存到 exe 所在目录，并由当前 Windows 用户加密保护。

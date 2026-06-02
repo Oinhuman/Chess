@@ -30,6 +30,14 @@
 #define SAVE_VERSION  20260518
 #define CHALLENGE_COUNT 3
 #define ADMIN_KEY_FILE "admin_key.txt"
+#define USERS_FILE "users.dat"
+#define STATS_FILE "stats.dat"
+#define LEGACY_SAVE_FILE "save.dat"
+#define BG_LOGIN_FILE "bg_login.png"
+#define BG_MENU_FILE "bg_menu.png"
+#define BG_GAME_FILE "bg_game.png"
+#define BG_WIN_FILE "bg_win.png"
+#define RUNTIME_PATH_MAX 1024
 #define DEFAULT_RESET_PASSWORD "123456"
 #define MODEL_API_KEY_MAX 256
 #define MODEL_NAME_TEXT "glm-5.1"
@@ -309,19 +317,54 @@ void trimLineEnd(char* text) {
     }
 }
 
+void getExeDir(char* out, int maxLen) {
+    if (!out || maxLen <= 0) return;
+    out[0] = 0;
+    char modulePath[RUNTIME_PATH_MAX] = {0};
+    DWORD len = GetModuleFileNameA(NULL, modulePath, RUNTIME_PATH_MAX);
+    if (len == 0 || len >= RUNTIME_PATH_MAX) return;
+    char* slash = strrchr(modulePath, '\\');
+    char* altSlash = strrchr(modulePath, '/');
+    if (!slash || (altSlash && altSlash > slash)) slash = altSlash;
+    if (!slash) return;
+    slash[1] = 0;
+    snprintf(out, maxLen, "%s", modulePath);
+    out[maxLen - 1] = 0;
+}
+
+void buildExeRelativePath(const char* fileName, char* out, int maxLen) {
+    if (!out || maxLen <= 0) return;
+    out[0] = 0;
+    if (!fileName || fileName[0] == 0) return;
+
+    char exeDir[RUNTIME_PATH_MAX] = {0};
+    getExeDir(exeDir, RUNTIME_PATH_MAX);
+    if (exeDir[0]) snprintf(out, maxLen, "%s%s", exeDir, fileName);
+    else snprintf(out, maxLen, "%s", fileName);
+    out[maxLen - 1] = 0;
+}
+
+FILE* fopenExeRelative(const char* fileName, const char* mode) {
+    char path[RUNTIME_PATH_MAX];
+    buildExeRelativePath(fileName, path, RUNTIME_PATH_MAX);
+    return fopen(path, mode);
+}
+
 void buildUserSavePath(const char* name, char* path, int maxLen) {
     const char* owner = (name && name[0]) ? name : "Guest";
-    snprintf(path, maxLen, "save_%08X.dat", simpleHash(owner));
-    path[maxLen - 1] = 0;
+    char fileName[64];
+    snprintf(fileName, sizeof(fileName), "save_%08X.dat", simpleHash(owner));
+    fileName[sizeof(fileName) - 1] = 0;
+    buildExeRelativePath(fileName, path, maxLen);
 }
 
 void ensureAdminKeyFile() {
-    FILE* fp = fopen(ADMIN_KEY_FILE, "r");
+    FILE* fp = fopenExeRelative(ADMIN_KEY_FILE, "r");
     if (fp) {
         fclose(fp);
         return;
     }
-    fp = fopen(ADMIN_KEY_FILE, "w");
+    fp = fopenExeRelative(ADMIN_KEY_FILE, "w");
     if (fp) fclose(fp);
 }
 
@@ -329,7 +372,7 @@ void loadAdminKey(char* out, int maxLen) {
     if (!out || maxLen <= 0) return;
     out[0] = 0;
     ensureAdminKeyFile();
-    FILE* fp = fopen(ADMIN_KEY_FILE, "r");
+    FILE* fp = fopenExeRelative(ADMIN_KEY_FILE, "r");
     if (fp) {
         if (fgets(out, maxLen, fp)) trimLineEnd(out);
         fclose(fp);
@@ -338,15 +381,17 @@ void loadAdminKey(char* out, int maxLen) {
 
 void buildUserModelKeyPath(const char* name, char* path, int maxLen) {
     const char* owner = (name && name[0]) ? name : "Guest";
-    snprintf(path, maxLen, "glm_key_%08X.dat", simpleHash(owner));
-    path[maxLen - 1] = 0;
+    char fileName[64];
+    snprintf(fileName, sizeof(fileName), "glm_key_%08X.dat", simpleHash(owner));
+    fileName[sizeof(fileName) - 1] = 0;
+    buildExeRelativePath(fileName, path, maxLen);
 }
 
 int saveModelApiKey(const char* apiKey) {
     if (!apiKey || apiKey[0] == 0) return 0;
-    char path[64];
+    char path[RUNTIME_PATH_MAX];
     const char* owner = currentUser[0] ? currentUser : "Guest";
-    buildUserModelKeyPath(owner, path, 64);
+    buildUserModelKeyPath(owner, path, RUNTIME_PATH_MAX);
 
     DATA_BLOB in;
     DATA_BLOB out;
@@ -373,9 +418,9 @@ int saveModelApiKey(const char* apiKey) {
 int loadModelApiKey(char* out, int maxLen) {
     if (!out || maxLen <= 0) return 0;
     out[0] = 0;
-    char path[64];
+    char path[RUNTIME_PATH_MAX];
     const char* owner = currentUser[0] ? currentUser : "Guest";
-    buildUserModelKeyPath(owner, path, 64);
+    buildUserModelKeyPath(owner, path, RUNTIME_PATH_MAX);
 
     FILE* fp = fopen(path, "rb");
     if (!fp) return 0;
@@ -550,7 +595,7 @@ void normalizeUserInfo(UserInfo* u) {
 void saveUser(const UserInfo* u) {
     UserInfo fixed = *u;
     normalizeUserInfo(&fixed);
-    FILE* fp = fopen("users.dat", "a");
+    FILE* fp = fopenExeRelative(USERS_FILE, "a");
     if (fp) {
         fprintf(fp, "%s %s %d %d %lld\n", fixed.name, fixed.pwdHash, fixed.exp, fixed.level, fixed.regTime);
         fclose(fp);
@@ -558,7 +603,7 @@ void saveUser(const UserInfo* u) {
 }
 
 int loadUsers(UserInfo out[], int maxCount) {
-    FILE* fp = fopen("users.dat", "r");
+    FILE* fp = fopenExeRelative(USERS_FILE, "r");
     if (!fp) return 0;
     int count = 0;
     while (count < maxCount) {
@@ -607,7 +652,7 @@ void updateUser(const UserInfo* u) {
         if (n >= 200) return;
         users[n++] = fixed;
     }
-    FILE* fp = fopen("users.dat", "w");
+    FILE* fp = fopenExeRelative(USERS_FILE, "w");
     if (!fp) return;
     for (int i = 0; i < n; i++) {
         fprintf(fp, "%s %s %d %d %lld\n", users[i].name, users[i].pwdHash, users[i].exp, users[i].level, users[i].regTime);
@@ -652,7 +697,7 @@ void saveStats(int result) {
         else if (result == 0) modelDuelModelScore++;
         else if (result == 2) modelDuelDrawScore++;
     }
-    FILE* fp = fopen("stats.dat", "a");
+    FILE* fp = fopenExeRelative(STATS_FILE, "a");
     if (fp) {
         fprintf(fp, "%s %d %d %d %d %d %d %d\n",
                 currentUser, difficulty, result, (int)time(NULL), stepCount,
@@ -711,7 +756,7 @@ void addStatToSummary(StatSummary* s, const StatRecord* rec) {
 
 void loadUserStatSummary(int modelFlag, StatSummary* out) {
     initStatSummary(out);
-    FILE* fp = fopen("stats.dat", "r");
+    FILE* fp = fopenExeRelative(STATS_FILE, "r");
     if (!fp) return;
     char line[256];
     while (fgets(line, sizeof(line), fp)) {
@@ -726,7 +771,7 @@ void loadUserStatSummary(int modelFlag, StatSummary* out) {
 
 void resetUserStatsByModelFlag(int modelFlag) {
     if (currentUser[0] == 0) return;
-    FILE* fp = fopen("stats.dat", "r");
+    FILE* fp = fopenExeRelative(STATS_FILE, "r");
     if (!fp) return;
     char lines[4000][128];
     int lineCount = 0;
@@ -736,7 +781,7 @@ void resetUserStatsByModelFlag(int modelFlag) {
         lineCount++;
     }
     fclose(fp);
-    fp = fopen("stats.dat", "w");
+    fp = fopenExeRelative(STATS_FILE, "w");
     if (!fp) return;
     for (int i = 0; i < lineCount; i++) {
         StatRecord rec;
@@ -752,7 +797,7 @@ void resetUserStatsByModelFlag(int modelFlag) {
 
 void resetUserStats() {
     if (currentUser[0] == 0) return;
-    FILE* fp = fopen("stats.dat", "r");
+    FILE* fp = fopenExeRelative(STATS_FILE, "r");
     if (!fp) return;
     char lines[4000][128];
     int lineCount = 0;
@@ -762,7 +807,7 @@ void resetUserStats() {
         lineCount++;
     }
     fclose(fp);
-    fp = fopen("stats.dat", "w");
+    fp = fopenExeRelative(STATS_FILE, "w");
     if (!fp) return;
     for (int i = 0; i < lineCount; i++) {
         char user[64] = {0};
@@ -775,7 +820,7 @@ void resetUserStats() {
 
 void removeStatsForUser(const char* name) {
     if (!name || name[0] == 0) return;
-    FILE* fp = fopen("stats.dat", "r");
+    FILE* fp = fopenExeRelative(STATS_FILE, "r");
     if (!fp) return;
     char lines[4000][128];
     int lineCount = 0;
@@ -785,7 +830,7 @@ void removeStatsForUser(const char* name) {
         lineCount++;
     }
     fclose(fp);
-    fp = fopen("stats.dat", "w");
+    fp = fopenExeRelative(STATS_FILE, "w");
     if (!fp) return;
     for (int i = 0; i < lineCount; i++) {
         char user[64] = {0};
@@ -797,8 +842,8 @@ void removeStatsForUser(const char* name) {
 }
 
 void removeSaveForUser(const char* name) {
-    char path[64];
-    buildUserSavePath(name, path, 64);
+    char path[RUNTIME_PATH_MAX];
+    buildUserSavePath(name, path, RUNTIME_PATH_MAX);
     remove(path);
 }
 
@@ -807,7 +852,7 @@ int deleteUserAccount(const char* name) {
     UserInfo users[200];
     int n = loadUsers(users, 200);
     int found = 0;
-    FILE* fp = fopen("users.dat", "w");
+    FILE* fp = fopenExeRelative(USERS_FILE, "w");
     if (!fp) return 0;
     for (int i = 0; i < n; i++) {
         if (strcmp(users[i].name, name) == 0) {
@@ -836,9 +881,9 @@ void resetGuestSessionData() {
 }
 
 int saveGameToFile(const GameSave* gs) {
-    char path[64];
+    char path[RUNTIME_PATH_MAX];
     const char* owner = (currentUser[0] ? currentUser : "Guest");
-    buildUserSavePath(owner, path, 64);
+    buildUserSavePath(owner, path, RUNTIME_PATH_MAX);
 
     GameSave fixed = *gs;
     safeCopy(fixed.owner, owner, 64);
@@ -867,9 +912,9 @@ int saveStreamUsableForCurrentUser(FILE* fp, long fsize) {
 }
 
 int openCurrentSaveFile(FILE** out, long* fsize) {
-    char path[64];
+    char path[RUNTIME_PATH_MAX];
     const char* owner = (currentUser[0] ? currentUser : "Guest");
-    buildUserSavePath(owner, path, 64);
+    buildUserSavePath(owner, path, RUNTIME_PATH_MAX);
     FILE* fp = fopen(path, "rb");
     if (fp) {
         fseek(fp, 0, SEEK_END);
@@ -881,7 +926,7 @@ int openCurrentSaveFile(FILE** out, long* fsize) {
         }
         fclose(fp);
     }
-    fp = fopen("save.dat", "rb"); // 兼容旧版单存档
+    fp = fopenExeRelative(LEGACY_SAVE_FILE, "rb"); // 兼容旧版单存档
     if (!fp) return 0;
     fseek(fp, 0, SEEK_END);
     *fsize = ftell(fp);
@@ -1003,11 +1048,13 @@ int savePathUsableForCurrentUser(const char* path) {
 }
 
 int hasSaveFile() {
-    char path[64];
+    char path[RUNTIME_PATH_MAX];
     const char* owner = (currentUser[0] ? currentUser : "Guest");
-    buildUserSavePath(owner, path, 64);
+    buildUserSavePath(owner, path, RUNTIME_PATH_MAX);
     if (savePathUsableForCurrentUser(path)) return 1;
-    return savePathUsableForCurrentUser("save.dat");
+    char legacyPath[RUNTIME_PATH_MAX];
+    buildExeRelativePath(LEGACY_SAVE_FILE, legacyPath, RUNTIME_PATH_MAX);
+    return savePathUsableForCurrentUser(legacyPath);
 }
 
 /* ===================== 棋盘基础 ===================== */
@@ -2995,7 +3042,7 @@ int promptAndSaveModelApiKey() {
     trimLineEnd(apiKey);
     if (strlen(apiKey) == 0) return 0;
     if (!saveModelApiKey(apiKey)) {
-        MessageBoxW(GetHWnd(), L"API Key 保存失败，请确认当前目录可写。", L"模型对局", MB_OK);
+        MessageBoxW(GetHWnd(), L"API Key 保存失败，请确认 exe 所在目录可写。", L"模型对局", MB_OK);
         return 0;
     }
     MessageBoxW(GetHWnd(), L"API Key 已保存到本机当前账号配置。", L"模型对局", MB_OK);
@@ -3578,7 +3625,7 @@ int buildLeaderboardStats(PlayerStat stats[], int maxCount, int modelPage) {
         stats[count].wins = 0; stats[count].losses = 0; stats[count].draws = 0;
         count++;
     }
-    FILE* fp = fopen("stats.dat", "r");
+    FILE* fp = fopenExeRelative(STATS_FILE, "r");
     if (fp) {
         char line[256];
         while (fgets(line, sizeof(line), fp)) {
@@ -4080,10 +4127,18 @@ int main() {
     lockWindowSize();
     setbkcolor(RGB(20, 20, 20));
     cleardevice();
-    loadimage(&imgLogin, "bg_login.png", WIN_WIDTH, WIN_HEIGHT);
-    loadimage(&imgMenu, "bg_menu.png", WIN_WIDTH, WIN_HEIGHT);
-    loadimage(&imgGame, "bg_game.png", WIN_WIDTH, WIN_HEIGHT);
-    loadimage(&imgWin, "bg_win.png");
+    char bgLoginPath[RUNTIME_PATH_MAX];
+    char bgMenuPath[RUNTIME_PATH_MAX];
+    char bgGamePath[RUNTIME_PATH_MAX];
+    char bgWinPath[RUNTIME_PATH_MAX];
+    buildExeRelativePath(BG_LOGIN_FILE, bgLoginPath, RUNTIME_PATH_MAX);
+    buildExeRelativePath(BG_MENU_FILE, bgMenuPath, RUNTIME_PATH_MAX);
+    buildExeRelativePath(BG_GAME_FILE, bgGamePath, RUNTIME_PATH_MAX);
+    buildExeRelativePath(BG_WIN_FILE, bgWinPath, RUNTIME_PATH_MAX);
+    loadimage(&imgLogin, bgLoginPath, WIN_WIDTH, WIN_HEIGHT);
+    loadimage(&imgMenu, bgMenuPath, WIN_WIDTH, WIN_HEIGHT);
+    loadimage(&imgGame, bgGamePath, WIN_WIDTH, WIN_HEIGHT);
+    loadimage(&imgWin, bgWinPath);
     BeginBatchDraw();
     loginScreen();
     while (1) {
