@@ -21,7 +21,7 @@ EasyX 图形库实现的古风五子棋/六子棋小游戏，包含账号系统�
 ## 编译
 
 ```powershell
-g++ 1.cpp -o 1.exe -leasyx -lgdi32 -limm32 -lmsimg32 -lole32 -loleaut32 -finput-charset=UTF-8 -fexec-charset=UTF-8
+g++ 1.cpp -o 1.exe -leasyx -lgdi32 -limm32 -lmsimg32 -lole32 -loleaut32 -lwinhttp -lcrypt32 -finput-charset=UTF-8 -fexec-charset=UTF-8
 ```
 
 编译后运行：
@@ -38,3 +38,4 @@ g++ 1.cpp -o 1.exe -leasyx -lgdi32 -limm32 -lmsimg32 -lole32 -loleaut32 -finput-
 - `users.dat`：注册账号后自动生成。
 - `stats.dat`：产生对局结果后自动生成。
 - `save_*.dat`：点击存档后自动生成；旧版 `save.dat` 只用于兼容读取，新版本不会主动生成。
+- `glm_key_*.dat`：开启“模型对局”并输入 GLM-5.1 API Key 后自动生成，只保存在本机当前 Windows 用户下。

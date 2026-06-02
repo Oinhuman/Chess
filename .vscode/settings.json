@@ -2,7 +2,7 @@
     "code-runner.runInTerminal": true,
     "code-runner.saveFileBeforeRun": true,
     "code-runner.executorMap": {
-        "cpp": "cd /d \"$dir\" && C:\\GCC\\mingw64\\bin\\g++.exe \"$fileName\" -o \"$fileNameWithoutExt.exe\" -leasyx -lgdi32 -limm32 -lmsimg32 -lole32 -loleaut32 -finput-charset=UTF-8 -fexec-charset=UTF-8 && \"$fileNameWithoutExt.exe\""
+        "cpp": "cd /d \"$dir\" && C:\\GCC\\mingw64\\bin\\g++.exe \"$fileName\" -o \"$fileNameWithoutExt.exe\" -leasyx -lgdi32 -limm32 -lmsimg32 -lole32 -loleaut32 -lwinhttp -lcrypt32 -finput-charset=UTF-8 -fexec-charset=UTF-8 && \"$fileNameWithoutExt.exe\""
     },
     "C_Cpp.errorSquiggles": "enabled"
 }
