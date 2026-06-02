@@ -1,0 +1,25 @@
+# Runtime data and local secrets
+users.dat
+stats.dat
+save.dat
+save_*.dat
+admin_key.txt
+glm_key_*.dat
+
+# Build outputs
+*.exe
+*.o
+*.obj
+*.pdb
+*.ilk
+*.dll
+build/
+dist/
+
+# Editor and OS local files
+.vscode/
+.vs/
+*.user
+*.suo
+Thumbs.db
+desktop.ini
