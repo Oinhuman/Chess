@@ -183,6 +183,7 @@ int modelDuelPlayerScore = 0;
 int modelDuelModelScore = 0;
 int modelDuelDrawScore = 0;
 wchar_t modelDuelStatus[128] = L"";
+wchar_t aiDialogueText[256] = L"";
 
 const wchar_t* challengeNames[CHALLENGE_COUNT] = {
     L"残局·双活杀", L"残局·攻守劫", L"残局·乱战局"
@@ -207,6 +208,8 @@ int hasImmediateWin(int color, int* outX, int* outY);
 int isLegalMoveForColor(int x, int y, int color);
 int tryBuildModelChallengeBoard(int index);
 void setModelDuelStatus(const wchar_t* text);
+int validateModelApiKey();
+void setAiDialogueBySituation(int eventType);
 
 /* ===================== 工具函数 ===================== */
 unsigned int simpleHash(const char* str) {
@@ -465,6 +468,45 @@ void resetModelDuelScore() {
     modelDuelModelScore = 0;
     modelDuelDrawScore = 0;
     wcscpy(modelDuelStatus, L"GLM-5.1 已就绪");
+}
+
+void setAiDialogueBySituation(int eventType) {
+    const wchar_t* lines[20];
+    int count = 0;
+    switch (eventType) {
+        case 0:
+            lines[count++] = L"哼，区区炼气期，也敢挑战本座？";
+            lines[count++] = L"今日便让你见识一下，何为天机！";
+            lines[count++] = L"落子无悔，这便是修仙界的规矩。";
+            break;
+        case 1:
+            lines[count++] = L"此子倒是有点意思...";
+            lines[count++] = L"雕虫小技，也敢班门弄斧？";
+            lines[count++] = L"这步棋，倒是有几分韩老魔的风骨。";
+            lines[count++] = L"本座倒要看看，你还能撑几手。";
+            break;
+        case 2:
+            lines[count++] = L"本座这一手，你可看清楚了？";
+            lines[count++] = L"莫要得意，本座还有后手。";
+            lines[count++] = L"天机不可泄露，但这局...你输定了。";
+            lines[count++] = L"这一子，便是你的劫数。";
+            break;
+        case 3:
+            lines[count++] = L"竟然...竟然被你寻到了生门...";
+            lines[count++] = L"此局是本座失算，道友这一手，算得上漂亮。";
+            break;
+        case 4:
+            lines[count++] = L"回去再修三百年吧。";
+            lines[count++] = L"区区炼气期，也敢挑战本座？";
+            break;
+        case 5:
+            lines[count++] = L"今日算你命大，且饶你一局。";
+            lines[count++] = L"天道无常，棋道亦然。";
+            break;
+    }
+    if (count > 0) {
+        wcscpy(aiDialogueText, lines[rand() % count]);
+    }
 }
 
 void enterUserSession(const char* name, int level, int exp) {
@@ -1739,7 +1781,7 @@ void drawInfoPanel(int gameOver, int result, int currentTurn) {
     SetBkMode(hdc, TRANSPARENT);
     int px = 770, py = 82, pw = WIN_WIDTH - 810;
     if (pw < 360) pw = 360;
-    int panelBottom = WIN_HEIGHT - 86;
+    int panelBottom = WIN_HEIGHT - 180;
     setfillcolor(PANEL_BG);
     setlinecolor(PANEL_BORDER);
     fillroundrect(px - 14, py - 16, px + pw + 14, panelBottom, 14, 14);
@@ -1839,6 +1881,29 @@ void drawInfoPanel(int gameOver, int result, int currentTurn) {
             py += 30;
         }
     }
+
+    int dh = 76;
+    int dlgTop = WIN_HEIGHT - 176;
+    setfillcolor(RGB(18, 16, 24));
+    setlinecolor(PANEL_BORDER);
+    fillroundrect(px - 10, dlgTop, px + pw + 10, dlgTop + dh, 12, 12);
+    roundrect(px - 6, dlgTop + 4, px + pw + 6, dlgTop + dh - 4, 10, 10);
+    HDC hdc2 = GetImageHDC(NULL);
+    SetBkMode(hdc2, TRANSPARENT);
+    SetTextColor(hdc2, RGB(220, 205, 160));
+    settextstyle(15, 0, "SimHei");
+    if (aiDialogueText[0]) {
+        SIZE sz;
+        GetTextExtentPoint32W(hdc2, aiDialogueText, wcslen(aiDialogueText), &sz);
+        if (sz.cx <= pw + 8) {
+            int tx = px + (pw - sz.cx) / 2;
+            TextOutW(hdc2, tx, dlgTop + 26, aiDialogueText, wcslen(aiDialogueText));
+        } else {
+            int half = (int)wcslen(aiDialogueText) / 2;
+            TextOutW(hdc2, px + 10, dlgTop + 12, aiDialogueText, half);
+            TextOutW(hdc2, px + 10, dlgTop + 38, aiDialogueText + half, (int)wcslen(aiDialogueText) - half);
+        }
+    }
 }
 
 void drawStatusBar(const wchar_t* extra) {
@@ -1846,7 +1911,7 @@ void drawStatusBar(const wchar_t* extra) {
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, TEXT_WHITE);
     settextstyle(18, 0, "SimHei");
-    TextOutW(hdc, 20, WIN_HEIGHT - 32, L"ESC-返回菜单  R-悔棋  H-心眼提示", wcslen(L"ESC-返回菜单  R-悔棋  H-心眼提示"));
+    TextOutW(hdc, 20, WIN_HEIGHT - 32, L"", 0);
     if (extra && wcslen(extra) > 0) {
         settextstyle(22, 0, "SimHei");
         SetTextColor(hdc, ACCENT_GOLD);
@@ -2252,6 +2317,20 @@ int httpPostGlm(const char* apiKey, const char* payload, char* response, int max
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
     return response[0] != 0;
+}
+
+int validateModelApiKey() {
+    char apiKey[MODEL_API_KEY_MAX];
+    if (!loadModelApiKey(apiKey, MODEL_API_KEY_MAX)) return 0;
+    char payload[512];
+    char response[4096];
+    wchar_t err[128] = L"";
+    snprintf(payload, sizeof(payload),
+             "{\"model\":\"%s\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":2,\"stream\":false}",
+             MODEL_NAME_TEXT);
+    if (!httpPostGlm(apiKey, payload, response, sizeof(response), err, 128)) return 0;
+    if (strstr(response, "\"error\"") != NULL) return 0;
+    return strstr(response, "\"content\"") != NULL;
 }
 
 int extractAssistantContent(const char* json, char* out, int maxLen) {
@@ -3045,7 +3124,12 @@ int promptAndSaveModelApiKey() {
         MessageBoxW(GetHWnd(), L"API Key 保存失败，请确认 exe 所在目录可写。", L"模型对局", MB_OK);
         return 0;
     }
-    MessageBoxW(GetHWnd(), L"API Key 已保存到本机当前账号配置。", L"模型对局", MB_OK);
+    MessageBoxW(GetHWnd(), L"API Key 已保存，正在验证...", L"模型对局", MB_OK);
+    if (validateModelApiKey()) {
+        MessageBoxW(GetHWnd(), L"API Key 验证通过，模型对局已就绪。", L"模型对局", MB_OK);
+    } else {
+        MessageBoxW(GetHWnd(), L"API Key 保存成功，但验证未通过。请检查网络或 Key 是否有效。", L"模型对局", MB_OK);
+    }
     return 1;
 }
 
@@ -3420,8 +3504,12 @@ void gameSettings() {
             }
             drawBackground(&imgMenu);
             drawCenterTextShadow(42, L"游戏设置", 34, ACCENT_GOLD);
-            drawCenterText(84, guestMode ? L"游客模式不提供模型对局；登录账号后可配置 GLM-5.1。" :
-                (modelDuelMode ? L"模型对局使用当前账号本机保存的 GLM-5.1 API Key。" : L"六子棋: 黑先落1子，之后双方每回合落2子。"), 17, RGB(220, 205, 160));
+            const wchar_t* settingsSubtitle;
+            if (guestMode) settingsSubtitle = L"游客模式不提供模型对局；登录账号后可配置 GLM-5.1。";
+            else if (modelDuelMode) settingsSubtitle = L"模型对局使用当前账号本机保存的 GLM-5.1 API Key。";
+            else if (gameMode == MODE_GOMOKU) settingsSubtitle = useForbidden ? L"五子棋: 黑棋先行，连五成阵，禁手已开启。" : L"五子棋: 黑棋先行，连五成阵，无禁手规则。";
+            else settingsSubtitle = L"六子棋: 黑先落1子，之后双方每回合落2子。";
+            drawCenterText(84, settingsSubtitle, 17, RGB(220, 205, 160));
             for (int i = 0; i < btnCount; i++) drawSmallButton(&btns[i], i == hover, 17);
             FlushBatchDraw();
             needRedraw = 0;
@@ -3452,6 +3540,12 @@ void gameSettings() {
                             if (!modelDuelMode) {
                                 if (!hasModelApiKey() && !promptAndSaveModelApiKey()) {
                                     needRedraw = 1; continue;
+                                }
+                                if (hasModelApiKey()) {
+                                    if (!validateModelApiKey()) {
+                                        MessageBoxW(GetHWnd(), L"当前保存的 API Key 验证未通过，请检查网络或重新输入。", L"模型对局", MB_OK);
+                                        needRedraw = 1; continue;
+                                    }
                                 }
                                 modelDuelMode = 1;
                                 resetModelDuelScore();
@@ -3524,10 +3618,11 @@ void showPersonalStats() {
         else wcscpy(regText, L"未知");
     }
     Button btnTianji, btnModel, btnReset, btnBack;
-    btnTianji.x = WIN_WIDTH / 2 - 300; btnTianji.y = 108; btnTianji.w = 180; btnTianji.h = 42; btnTianji.text = L"天机数据";
-    btnModel.x = WIN_WIDTH / 2 - 100; btnModel.y = 108; btnModel.w = 180; btnModel.h = 42; btnModel.text = L"GLM-5.1";
-    btnReset.x = WIN_WIDTH / 2 + 100; btnReset.y = 108; btnReset.w = 180; btnReset.h = 42; btnReset.text = L"重置本页";
-    btnBack.x = WIN_WIDTH / 2 + 300; btnBack.y = 108; btnBack.w = 180; btnBack.h = 42; btnBack.text = L"返回";
+    int btnY = WIN_HEIGHT - 92;
+    btnTianji.x = WIN_WIDTH / 2 - 330; btnTianji.y = btnY; btnTianji.w = 200; btnTianji.h = 46; btnTianji.text = L"天机数据";
+    btnModel.x = WIN_WIDTH / 2 - 100; btnModel.y = btnY; btnModel.w = 200; btnModel.h = 46; btnModel.text = L"GLM-5.1";
+    btnReset.x = WIN_WIDTH / 2 + 130; btnReset.y = btnY; btnReset.w = 200; btnReset.h = 46; btnReset.text = L"重置本页";
+    btnBack.x = WIN_WIDTH / 2 + 360; btnBack.y = btnY; btnBack.w = 200; btnBack.h = 46; btnBack.text = L"返回";
     Button* btns[4] = {&btnTianji, &btnModel, &btnReset, &btnBack};
     int page = 0;
     int hover = -1;
@@ -3786,14 +3881,15 @@ void startGame(int isContinue) {
         else initBoard();
     }
     stepStartTime = GetTickCount();
+    setAiDialogueBySituation(0);
 
     Button btnUndo, btnGiveUp, btnDraw, btnSave, btnBack;
-    int bw = 110, bh = 36, gap = 14;
-    int startX = (WIN_WIDTH - (5*bw + 4*gap)) / 2;
-    int by = WIN_HEIGHT - 90;
-    btnUndo.x = startX; btnUndo.y = by; btnUndo.w = bw; btnUndo.h = bh; btnUndo.text = L"悔棋(R)";
+    int bw = 124, bh = 42, gap = 19;
+    int startX = getCellX(0) - 12;
+    int by = WIN_HEIGHT - 82;
+    btnUndo.x = startX; btnUndo.y = by; btnUndo.w = bw; btnUndo.h = bh; btnUndo.text = L"悔棋";
     btnGiveUp.x = startX + bw + gap; btnGiveUp.y = by; btnGiveUp.w = bw; btnGiveUp.h = bh; btnGiveUp.text = L"认输";
-    btnDraw.x = startX + 2*(bw+gap); btnDraw.y = by; btnDraw.w = bw; btnDraw.h = bh; btnDraw.text = challengeMode ? L"提示(H)" : (modelDuelMode ? L"清比分" : L"求和");
+    btnDraw.x = startX + 2*(bw+gap); btnDraw.y = by; btnDraw.w = bw; btnDraw.h = bh; btnDraw.text = L"心眼提示";
     btnSave.x = startX + 3*(bw+gap); btnSave.y = by; btnSave.w = bw; btnSave.h = bh; btnSave.text = (challengeMode || modelDuelMode) ? L"换局" : L"存档";
     btnBack.x = startX + 4*(bw+gap); btnBack.y = by; btnBack.w = bw; btnBack.h = bh; btnBack.text = L"返回";
     Button* bottomBtns[5] = {&btnUndo, &btnGiveUp, &btnDraw, &btnSave, &btnBack};
@@ -3808,8 +3904,9 @@ void startGame(int isContinue) {
         FlushBatchDraw();
         Sleep(300);
         int aiResult = playAITurn(&lastCol, &lastRow);
-        if (aiResult == 1) { gameOver = 1; result = 0; saveStats(0); }
-        else if (aiResult == 2) { gameOver = 1; result = 2; saveStats(2); }
+        if (aiResult == 1) { gameOver = 1; result = 0; saveStats(0); setAiDialogueBySituation(4); }
+        else if (aiResult == 2) { gameOver = 1; result = 2; saveStats(2); setAiDialogueBySituation(5); }
+        else { setAiDialogueBySituation(2); }
         currentTurn = playerColor;
         stepStartTime = GetTickCount();
         aiThinking = 0;
@@ -3832,32 +3929,12 @@ void startGame(int isContinue) {
             drawStatusBar(L"");
             FlushBatchDraw();
         }
-        if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
-            while (GetAsyncKeyState(VK_ESCAPE) & 0x8000) Sleep(10);
-            int ans = MessageBoxW(GetHWnd(), L"返回主菜单？未保存的进度将丢失。", L"确认", MB_YESNO);
-            if (ans == IDYES) { gameRunning = 0; return; }
-            doRedraw = 1; continue;
-        }
-        if (!gameOver && !aiThinking && (GetAsyncKeyState('R') & 0x8000 || GetAsyncKeyState('r') & 0x8000)) {
-            while ((GetAsyncKeyState('R') & 0x8000) || (GetAsyncKeyState('r') & 0x8000)) Sleep(10);
-            if (canUndoNow()) {
-                undoMove();
-                if (historyCount > 0) { lastCol = history[historyCount-1].x; lastRow = history[historyCount-1].y; }
-                else { lastCol = -1; lastRow = -1; }
-                currentTurn = playerColor;
-                drawOffered = 0;
-                doRedraw = 1; continue;
-            }
-        }
-        if (GetAsyncKeyState('H') & 0x8000 || GetAsyncKeyState('h') & 0x8000) {
-            while ((GetAsyncKeyState('H') & 0x8000) || (GetAsyncKeyState('h') & 0x8000)) Sleep(10);
-            showHints = !showHints;
-            doRedraw = 1; continue;
-        }
+
         if (!gameOver && gameRunning && timeLimit > 0 && currentTurn == playerColor) {
             DWORD elapsed = (GetTickCount() - stepStartTime) / 1000;
             if ((int)elapsed >= timeLimit) {
                 gameOver = 1; result = 0; saveStats(0); playSoundEffect(2);
+                setAiDialogueBySituation(4);
                 doRedraw = 1; continue;
             }
         }
@@ -3905,44 +3982,12 @@ void startGame(int isContinue) {
                     } else if (btnClicked == 1) {
                         if (!gameOver) {
                             gameOver = 1; result = 0; saveStats(0); playSoundEffect(2);
+                            setAiDialogueBySituation(4);
                             doRedraw = 1; continue;
                         }
                     } else if (btnClicked == 2) {
-                        if (challengeMode) {
-                            showHints = 1;
-                            doRedraw = 1; continue;
-                        }
-                        if (modelDuelMode) {
-                            resetModelDuelScore();
-                            doRedraw = 1; continue;
-                        }
-                        if (!gameOver && !aiThinking) {
-                            if (drawOffered) {
-                                MessageBoxW(GetHWnd(), L"已提出求和，不可重复申请。", L"提示", MB_OK);
-                                doRedraw = 1; continue;
-                            }
-                            drawOffered = 1;
-                            int agree = 0;
-                            if (difficulty == 1) agree = (rand() % 100 < 40);
-                            else if (difficulty == 2) agree = (rand() % 100 < 60);
-                            else {
-                                int myScore = 0, opScore = 0;
-                                int moves[20][2]; int n = generateMoves(moves, 20, aiColor);
-                                for (int i = 0; i < n; i++) {
-                                    int s1 = evaluatePointAdvanced(moves[i][0], moves[i][1], aiColor);
-                                    int s2 = evaluatePointAdvanced(moves[i][0], moves[i][1], playerColor);
-                                    if (s1 > myScore) myScore = s1;
-                                    if (s2 > opScore) opScore = s2;
-                                }
-                                agree = (opScore > myScore + 5000);
-                            }
-                            if (agree) {
-                                gameOver = 1; result = 2; saveStats(2); playSoundEffect(1);
-                            } else {
-                                MessageBoxW(GetHWnd(), L"本座拒绝和棋，继续！", L"天机", MB_OK);
-                            }
-                            doRedraw = 1; continue;
-                        }
+                        showHints = !showHints;
+                        doRedraw = 1; continue;
                     } else if (btnClicked == 3) {
                         if (challengeMode) {
                             loadChallengeBoard(challengeIndex);
@@ -4012,6 +4057,7 @@ void startGame(int isContinue) {
                     if (!challengeMode && modelDuelMode) setModelDuelStatus(L"GLM-5.1 已就绪");
                     gameOver = 0; result = -1; lastCol = -1; lastRow = -1; drawOffered = 0;
                     currentTurn = playerColor;
+                    setAiDialogueBySituation(0);
                     if (!challengeMode && playerColor == 2) {
                         aiThinking = 1;
                         redrawScene(-1, -1, lastCol, lastRow, gameOver, result);
@@ -4042,6 +4088,7 @@ void startGame(int isContinue) {
                 turnPlacedThisRound++;
                 if (challengeMode) challengePlayerMoves = countChallengePlayerMoves();
                 drawOffered = 0;
+                setAiDialogueBySituation(1);
                 playSoundEffect(0);
                 redrawScene(hoverCol, hoverRow, lastCol, lastRow, gameOver, result);
                 drawInfoPanel(gameOver, result, currentTurn);
@@ -4049,16 +4096,19 @@ void startGame(int isContinue) {
                 drawStatusBar(L""); FlushBatchDraw();
                 if (checkWin(col, row, playerColor)) {
                     gameOver = 1; result = 1; saveStats(1); playSoundEffect(1);
+                    setAiDialogueBySituation(3);
                     doRedraw = 1; continue;
                 }
                 if (isBoardFull()) {
                     gameOver = 1; result = 2; saveStats(2); playSoundEffect(1);
+                    setAiDialogueBySituation(5);
                     doRedraw = 1; continue;
                 }
                 if (challengeMode) {
                     challengePlayerMoves = countChallengePlayerMoves();
                     if (challengePlayerMoves >= challengeMoveLimit) {
                         gameOver = 1; result = 0; playSoundEffect(2);
+                        setAiDialogueBySituation(4);
                         doRedraw = 1; continue;
                     }
                 }
@@ -4075,6 +4125,7 @@ void startGame(int isContinue) {
                 aiThinking = 1;
                 Sleep(200);
                 int aiResult = playAITurn(&lastCol, &lastRow);
+                if (!gameOver) setAiDialogueBySituation(2);
                 currentTurn = playerColor; stepStartTime = GetTickCount();
                 redrawScene(hoverCol, hoverRow, lastCol, lastRow, gameOver, result);
                 drawInfoPanel(gameOver, result, currentTurn);
@@ -4082,10 +4133,12 @@ void startGame(int isContinue) {
                 drawStatusBar(L""); FlushBatchDraw();
                 if (aiResult == 1) {
                     gameOver = 1; result = 0; saveStats(0); playSoundEffect(2);
+                    setAiDialogueBySituation(4);
                     aiThinking = 0; doRedraw = 1; continue;
                 }
                 if (aiResult == 2 || isBoardFull()) {
                     gameOver = 1; result = 2; saveStats(2); playSoundEffect(1);
+                    setAiDialogueBySituation(5);
                     aiThinking = 0; doRedraw = 1; continue;
                 }
                 aiThinking = 0;
