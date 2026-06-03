@@ -29,6 +29,7 @@
 #define MODE_CONNECT6 1
 #define SAVE_VERSION  20260518
 #define CHALLENGE_COUNT 3
+#define RUNTIME_DATA_DIR "data"
 #define ADMIN_KEY_FILE "admin_key.txt"
 #define USERS_FILE "users.dat"
 #define STATS_FILE "stats.dat"
@@ -207,9 +208,12 @@ int isInsideBoard(int x, int y);
 int hasImmediateWin(int color, int* outX, int* outY);
 int isLegalMoveForColor(int x, int y, int color);
 int tryBuildModelChallengeBoard(int index);
+int tryBuildModelChallengeBoardResponsive(int index);
 void setModelDuelStatus(const wchar_t* text);
 int validateModelApiKey();
+int validateModelApiKeyResponsive();
 void setAiDialogueBySituation(int eventType);
+int parseStatLine(const char* line, StatRecord* rec);
 
 /* ===================== 工具函数 ===================== */
 unsigned int simpleHash(const char* str) {
@@ -353,33 +357,75 @@ FILE* fopenExeRelative(const char* fileName, const char* mode) {
     return fopen(path, mode);
 }
 
+void ensureRuntimeDataDir() {
+    char dir[RUNTIME_PATH_MAX];
+    buildExeRelativePath(RUNTIME_DATA_DIR, dir, RUNTIME_PATH_MAX);
+    if (dir[0] == 0) return;
+    DWORD attrs = GetFileAttributesA(dir);
+    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) return;
+    CreateDirectoryA(dir, NULL);
+}
+
+void buildRuntimeDataPath(const char* fileName, char* out, int maxLen) {
+    if (!out || maxLen <= 0) return;
+    out[0] = 0;
+    if (!fileName || fileName[0] == 0) return;
+
+    ensureRuntimeDataDir();
+    char exeDir[RUNTIME_PATH_MAX] = {0};
+    getExeDir(exeDir, RUNTIME_PATH_MAX);
+    if (exeDir[0]) snprintf(out, maxLen, "%s%s\\%s", exeDir, RUNTIME_DATA_DIR, fileName);
+    else snprintf(out, maxLen, "%s\\%s", RUNTIME_DATA_DIR, fileName);
+    out[maxLen - 1] = 0;
+}
+
+void migrateRootRuntimeFileToData(const char* fileName) {
+    if (!fileName || fileName[0] == 0) return;
+    char oldPath[RUNTIME_PATH_MAX];
+    char newPath[RUNTIME_PATH_MAX];
+    buildExeRelativePath(fileName, oldPath, RUNTIME_PATH_MAX);
+    buildRuntimeDataPath(fileName, newPath, RUNTIME_PATH_MAX);
+    if (oldPath[0] == 0 || newPath[0] == 0 || strcmp(oldPath, newPath) == 0) return;
+    if (GetFileAttributesA(newPath) != INVALID_FILE_ATTRIBUTES) return;
+
+    DWORD oldAttrs = GetFileAttributesA(oldPath);
+    if (oldAttrs == INVALID_FILE_ATTRIBUTES || (oldAttrs & FILE_ATTRIBUTE_DIRECTORY)) return;
+    MoveFileA(oldPath, newPath);
+}
+
+FILE* fopenRuntimeData(const char* fileName, const char* mode) {
+    migrateRootRuntimeFileToData(fileName);
+    char path[RUNTIME_PATH_MAX];
+    buildRuntimeDataPath(fileName, path, RUNTIME_PATH_MAX);
+    return fopen(path, mode);
+}
+
+void migrateFixedRuntimeFilesToData() {
+    ensureRuntimeDataDir();
+    migrateRootRuntimeFileToData(ADMIN_KEY_FILE);
+    migrateRootRuntimeFileToData(USERS_FILE);
+    migrateRootRuntimeFileToData(STATS_FILE);
+    migrateRootRuntimeFileToData(LEGACY_SAVE_FILE);
+}
+
 void buildUserSavePath(const char* name, char* path, int maxLen) {
     const char* owner = (name && name[0]) ? name : "Guest";
     char fileName[64];
     snprintf(fileName, sizeof(fileName), "save_%08X.dat", simpleHash(owner));
     fileName[sizeof(fileName) - 1] = 0;
-    buildExeRelativePath(fileName, path, maxLen);
+    migrateRootRuntimeFileToData(fileName);
+    buildRuntimeDataPath(fileName, path, maxLen);
 }
 
-void ensureAdminKeyFile() {
-    FILE* fp = fopenExeRelative(ADMIN_KEY_FILE, "r");
-    if (fp) {
-        fclose(fp);
-        return;
-    }
-    fp = fopenExeRelative(ADMIN_KEY_FILE, "w");
-    if (fp) fclose(fp);
-}
-
-void loadAdminKey(char* out, int maxLen) {
-    if (!out || maxLen <= 0) return;
+int loadAdminKey(char* out, int maxLen) {
+    if (!out || maxLen <= 0) return 0;
     out[0] = 0;
-    ensureAdminKeyFile();
-    FILE* fp = fopenExeRelative(ADMIN_KEY_FILE, "r");
+    FILE* fp = fopenRuntimeData(ADMIN_KEY_FILE, "r");
     if (fp) {
         if (fgets(out, maxLen, fp)) trimLineEnd(out);
         fclose(fp);
     }
+    return out[0] != 0;
 }
 
 void buildUserModelKeyPath(const char* name, char* path, int maxLen) {
@@ -387,7 +433,23 @@ void buildUserModelKeyPath(const char* name, char* path, int maxLen) {
     char fileName[64];
     snprintf(fileName, sizeof(fileName), "glm_key_%08X.dat", simpleHash(owner));
     fileName[sizeof(fileName) - 1] = 0;
-    buildExeRelativePath(fileName, path, maxLen);
+    migrateRootRuntimeFileToData(fileName);
+    buildRuntimeDataPath(fileName, path, maxLen);
+}
+
+void removeModelKeyForUser(const char* name) {
+    const char* owner = (name && name[0]) ? name : "Guest";
+    char fileName[64];
+    snprintf(fileName, sizeof(fileName), "glm_key_%08X.dat", simpleHash(owner));
+    fileName[sizeof(fileName) - 1] = 0;
+
+    char path[RUNTIME_PATH_MAX];
+    buildUserModelKeyPath(name, path, RUNTIME_PATH_MAX);
+    remove(path);
+
+    char oldPath[RUNTIME_PATH_MAX];
+    buildExeRelativePath(fileName, oldPath, RUNTIME_PATH_MAX);
+    if (strcmp(path, oldPath) != 0) remove(oldPath);
 }
 
 int saveModelApiKey(const char* apiKey) {
@@ -594,6 +656,17 @@ void lockWindowSize() {
     updateOrigin();
 }
 
+void pumpUiMessages() {
+    MSG winMsg;
+    while (PeekMessageW(&winMsg, NULL, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&winMsg);
+        DispatchMessageW(&winMsg);
+    }
+    ExMessage ignored;
+    while (peekmessage(&ignored, EX_MOUSE)) {
+    }
+}
+
 /* ===================== 修仙境界 ===================== */
 const wchar_t* getXianLevelName(int exp) {
     if (exp < 50)  return L"炼气初期";
@@ -634,72 +707,202 @@ void normalizeUserInfo(UserInfo* u) {
     if (u->regTime <= 0) u->regTime = (long long)time(NULL);
 }
 
-void saveUser(const UserInfo* u) {
+int parseUserLine(const char* line, UserInfo* out) {
+    if (!line || !out) return 0;
+    UserInfo tmp;
+    if (sscanf(line, "%63s %32s %d %d %lld", tmp.name, tmp.pwdHash, &tmp.exp, &tmp.level, &tmp.regTime) == 5) {
+        normalizeUserInfo(&tmp);
+        *out = tmp;
+        return 1;
+    }
+    if (sscanf(line, "%63s %32s", tmp.name, tmp.pwdHash) == 2) {
+        tmp.exp = 0; tmp.level = 1; tmp.regTime = 0;
+        normalizeUserInfo(&tmp);
+        *out = tmp;
+        return 1;
+    }
+    return 0;
+}
+
+int writeUserLine(FILE* fp, const UserInfo* u) {
+    if (!fp || !u) return 0;
+    return fprintf(fp, "%s %s %d %d %lld\n", u->name, u->pwdHash, u->exp, u->level, u->regTime) > 0;
+}
+
+int userNameExists(const char* name) {
+    if (!name || name[0] == 0) return 0;
+    FILE* fp = fopenRuntimeData(USERS_FILE, "r");
+    if (!fp) return 0;
+    char line[256];
+    while (fgets(line, sizeof(line), fp)) {
+        UserInfo tmp;
+        if (parseUserLine(line, &tmp) && strcmp(tmp.name, name) == 0) {
+            fclose(fp);
+            return 1;
+        }
+    }
+    fclose(fp);
+    return 0;
+}
+
+int saveUser(const UserInfo* u) {
+    if (!u || u->name[0] == 0 || userNameExists(u->name)) return 0;
     UserInfo fixed = *u;
     normalizeUserInfo(&fixed);
-    FILE* fp = fopenExeRelative(USERS_FILE, "a");
-    if (fp) {
-        fprintf(fp, "%s %s %d %d %lld\n", fixed.name, fixed.pwdHash, fixed.exp, fixed.level, fixed.regTime);
-        fclose(fp);
+    FILE* fp = fopenRuntimeData(USERS_FILE, "a");
+    if (!fp) return 0;
+    int ok = writeUserLine(fp, &fixed);
+    fclose(fp);
+    return ok;
+}
+
+int replaceRuntimeDataFile(const char* tmpFileName, const char* targetFileName) {
+    char tmpPath[RUNTIME_PATH_MAX];
+    char targetPath[RUNTIME_PATH_MAX];
+    buildRuntimeDataPath(tmpFileName, tmpPath, RUNTIME_PATH_MAX);
+    buildRuntimeDataPath(targetFileName, targetPath, RUNTIME_PATH_MAX);
+    if (tmpPath[0] == 0 || targetPath[0] == 0) return 0;
+    if (MoveFileExA(tmpPath, targetPath, MOVEFILE_REPLACE_EXISTING)) return 1;
+    remove(tmpPath);
+    return 0;
+}
+
+int rewriteUserWithUpsert(const UserInfo* u) {
+    if (!u || u->name[0] == 0) return 0;
+    UserInfo fixed = *u;
+    normalizeUserInfo(&fixed);
+
+    FILE* in = fopenRuntimeData(USERS_FILE, "r");
+    FILE* out = fopenRuntimeData("users.tmp", "w");
+    if (!out) {
+        if (in) fclose(in);
+        return 0;
     }
+
+    int found = 0;
+    int ok = 1;
+    if (in) {
+        char line[256];
+        while (fgets(line, sizeof(line), in)) {
+            UserInfo tmp;
+            if (parseUserLine(line, &tmp) && strcmp(tmp.name, fixed.name) == 0) {
+                if (!writeUserLine(out, &fixed)) ok = 0;
+                found = 1;
+            } else {
+                if (fputs(line, out) == EOF) ok = 0;
+            }
+        }
+        fclose(in);
+    }
+    if (!found && !writeUserLine(out, &fixed)) ok = 0;
+    if (fclose(out) != 0) ok = 0;
+    if (!ok) {
+        char tmpPath[RUNTIME_PATH_MAX];
+        buildRuntimeDataPath("users.tmp", tmpPath, RUNTIME_PATH_MAX);
+        remove(tmpPath);
+        return 0;
+    }
+    return replaceRuntimeDataFile("users.tmp", USERS_FILE);
+}
+
+int rewriteUsersWithoutName(const char* name) {
+    if (!name || name[0] == 0) return 0;
+    FILE* in = fopenRuntimeData(USERS_FILE, "r");
+    if (!in) return 0;
+    FILE* out = fopenRuntimeData("users.tmp", "w");
+    if (!out) {
+        fclose(in);
+        return 0;
+    }
+
+    int found = 0;
+    int ok = 1;
+    char line[256];
+    while (fgets(line, sizeof(line), in)) {
+        UserInfo tmp;
+        if (parseUserLine(line, &tmp) && strcmp(tmp.name, name) == 0) {
+            found = 1;
+            continue;
+        }
+        if (fputs(line, out) == EOF) ok = 0;
+    }
+    fclose(in);
+    if (fclose(out) != 0) ok = 0;
+    if (!ok || !found) {
+        char tmpPath[RUNTIME_PATH_MAX];
+        buildRuntimeDataPath("users.tmp", tmpPath, RUNTIME_PATH_MAX);
+        remove(tmpPath);
+        return 0;
+    }
+    return replaceRuntimeDataFile("users.tmp", USERS_FILE);
+}
+
+int rewriteStatsForUser(const char* name, int filterModelFlag, int modelFlag) {
+    if (!name || name[0] == 0) return 0;
+    FILE* in = fopenRuntimeData(STATS_FILE, "r");
+    if (!in) return 1;
+    FILE* out = fopenRuntimeData("stats.tmp", "w");
+    if (!out) {
+        fclose(in);
+        return 0;
+    }
+
+    int ok = 1;
+    char line[512];
+    while (fgets(line, sizeof(line), in)) {
+        StatRecord rec;
+        int removeLine = parseStatLine(line, &rec) &&
+                         strcmp(rec.user, name) == 0 &&
+                         (!filterModelFlag || rec.modelFlag == modelFlag);
+        if (removeLine) continue;
+        if (fputs(line, out) == EOF) ok = 0;
+    }
+    fclose(in);
+    if (fclose(out) != 0) ok = 0;
+    if (!ok) {
+        char tmpPath[RUNTIME_PATH_MAX];
+        buildRuntimeDataPath("stats.tmp", tmpPath, RUNTIME_PATH_MAX);
+        remove(tmpPath);
+        return 0;
+    }
+    return replaceRuntimeDataFile("stats.tmp", STATS_FILE);
 }
 
 int loadUsers(UserInfo out[], int maxCount) {
-    FILE* fp = fopenExeRelative(USERS_FILE, "r");
+    FILE* fp = fopenRuntimeData(USERS_FILE, "r");
     if (!fp) return 0;
     int count = 0;
     while (count < maxCount) {
         char line[256];
         if (!fgets(line, sizeof(line), fp)) break;
         UserInfo tmp;
-        if (sscanf(line, "%63s %32s %d %d %lld", tmp.name, tmp.pwdHash, &tmp.exp, &tmp.level, &tmp.regTime) == 5) {
-            normalizeUserInfo(&tmp);
-            out[count++] = tmp;
-        } else if (sscanf(line, "%63s %32s", tmp.name, tmp.pwdHash) == 2) {
-            tmp.exp = 0; tmp.level = 1; tmp.regTime = 0;
-            normalizeUserInfo(&tmp);
-            out[count++] = tmp;
-        }
+        if (parseUserLine(line, &tmp)) out[count++] = tmp;
     }
     fclose(fp);
     return count;
 }
 
 int findUser(const char* name, UserInfo* out) {
-    UserInfo users[200];
-    int n = loadUsers(users, 200);
-    int found = 0;
-    for (int i = 0; i < n; i++) {
-        if (strcmp(users[i].name, name) == 0) {
-            if (out) *out = users[i];
-            found = 1;
+    if (!name || name[0] == 0) return 0;
+    FILE* fp = fopenRuntimeData(USERS_FILE, "r");
+    if (fp) {
+        int found = 0;
+        char line[256];
+        while (fgets(line, sizeof(line), fp)) {
+            UserInfo tmp;
+            if (parseUserLine(line, &tmp) && strcmp(tmp.name, name) == 0) {
+                if (out) *out = tmp;
+                found = 1;
+            }
         }
+        fclose(fp);
+        return found;
     }
-    return found;
+    return 0;
 }
 
 void updateUser(const UserInfo* u) {
-    UserInfo users[200];
-    int n = loadUsers(users, 200);
-    UserInfo fixed = *u;
-    normalizeUserInfo(&fixed);
-    int found = 0;
-    for (int i = 0; i < n; i++) {
-        if (strcmp(users[i].name, fixed.name) == 0) {
-            users[i] = fixed;
-            found = 1;
-        }
-    }
-    if (!found) {
-        if (n >= 200) return;
-        users[n++] = fixed;
-    }
-    FILE* fp = fopenExeRelative(USERS_FILE, "w");
-    if (!fp) return;
-    for (int i = 0; i < n; i++) {
-        fprintf(fp, "%s %s %d %d %lld\n", users[i].name, users[i].pwdHash, users[i].exp, users[i].level, users[i].regTime);
-    }
-    fclose(fp);
+    rewriteUserWithUpsert(u);
 }
 
 int verifyUserPassword(UserInfo* u, const char* pwd) {
@@ -739,7 +942,7 @@ void saveStats(int result) {
         else if (result == 0) modelDuelModelScore++;
         else if (result == 2) modelDuelDrawScore++;
     }
-    FILE* fp = fopenExeRelative(STATS_FILE, "a");
+    FILE* fp = fopenRuntimeData(STATS_FILE, "a");
     if (fp) {
         fprintf(fp, "%s %d %d %d %d %d %d %d\n",
                 currentUser, difficulty, result, (int)time(NULL), stepCount,
@@ -798,7 +1001,7 @@ void addStatToSummary(StatSummary* s, const StatRecord* rec) {
 
 void loadUserStatSummary(int modelFlag, StatSummary* out) {
     initStatSummary(out);
-    FILE* fp = fopenExeRelative(STATS_FILE, "r");
+    FILE* fp = fopenRuntimeData(STATS_FILE, "r");
     if (!fp) return;
     char line[256];
     while (fgets(line, sizeof(line), fp)) {
@@ -813,109 +1016,50 @@ void loadUserStatSummary(int modelFlag, StatSummary* out) {
 
 void resetUserStatsByModelFlag(int modelFlag) {
     if (currentUser[0] == 0) return;
-    FILE* fp = fopenExeRelative(STATS_FILE, "r");
-    if (!fp) return;
-    char lines[4000][128];
-    int lineCount = 0;
-    char line[128];
-    while (fgets(line, sizeof(line), fp) && lineCount < 4000) {
-        safeCopy(lines[lineCount], line, 128);
-        lineCount++;
-    }
-    fclose(fp);
-    fp = fopenExeRelative(STATS_FILE, "w");
-    if (!fp) return;
-    for (int i = 0; i < lineCount; i++) {
-        StatRecord rec;
-        if (parseStatLine(lines[i], &rec) &&
-            strcmp(rec.user, currentUser) == 0 &&
-            rec.modelFlag == modelFlag) {
-            continue;
-        }
-        fputs(lines[i], fp);
-    }
-    fclose(fp);
+    rewriteStatsForUser(currentUser, 1, modelFlag);
 }
 
 void resetUserStats() {
     if (currentUser[0] == 0) return;
-    FILE* fp = fopenExeRelative(STATS_FILE, "r");
-    if (!fp) return;
-    char lines[4000][128];
-    int lineCount = 0;
-    char line[128];
-    while (fgets(line, sizeof(line), fp) && lineCount < 4000) {
-        safeCopy(lines[lineCount], line, 128);
-        lineCount++;
-    }
-    fclose(fp);
-    fp = fopenExeRelative(STATS_FILE, "w");
-    if (!fp) return;
-    for (int i = 0; i < lineCount; i++) {
-        char user[64] = {0};
-        sscanf(lines[i], "%63s", user);
-        if (strcmp(user, currentUser) == 0) continue;
-        fputs(lines[i], fp);
-    }
-    fclose(fp);
+    rewriteStatsForUser(currentUser, 0, 0);
 }
 
 void removeStatsForUser(const char* name) {
     if (!name || name[0] == 0) return;
-    FILE* fp = fopenExeRelative(STATS_FILE, "r");
-    if (!fp) return;
-    char lines[4000][128];
-    int lineCount = 0;
-    char line[128];
-    while (fgets(line, sizeof(line), fp) && lineCount < 4000) {
-        safeCopy(lines[lineCount], line, 128);
-        lineCount++;
-    }
-    fclose(fp);
-    fp = fopenExeRelative(STATS_FILE, "w");
-    if (!fp) return;
-    for (int i = 0; i < lineCount; i++) {
-        char user[64] = {0};
-        sscanf(lines[i], "%63s", user);
-        if (strcmp(user, name) == 0) continue;
-        fputs(lines[i], fp);
-    }
-    fclose(fp);
+    rewriteStatsForUser(name, 0, 0);
 }
 
 void removeSaveForUser(const char* name) {
+    const char* owner = (name && name[0]) ? name : "Guest";
+    char fileName[64];
+    snprintf(fileName, sizeof(fileName), "save_%08X.dat", simpleHash(owner));
+    fileName[sizeof(fileName) - 1] = 0;
+
     char path[RUNTIME_PATH_MAX];
     buildUserSavePath(name, path, RUNTIME_PATH_MAX);
     remove(path);
+
+    char oldPath[RUNTIME_PATH_MAX];
+    buildExeRelativePath(fileName, oldPath, RUNTIME_PATH_MAX);
+    if (strcmp(path, oldPath) != 0) remove(oldPath);
 }
 
 int deleteUserAccount(const char* name) {
     if (!name || name[0] == 0 || strcmp(name, "Guest") == 0) return 0;
-    UserInfo users[200];
-    int n = loadUsers(users, 200);
-    int found = 0;
-    FILE* fp = fopenExeRelative(USERS_FILE, "w");
-    if (!fp) return 0;
-    for (int i = 0; i < n; i++) {
-        if (strcmp(users[i].name, name) == 0) {
-            found = 1;
-            continue;
-        }
-        fprintf(fp, "%s %s %d %d %lld\n",
-                users[i].name, users[i].pwdHash, users[i].exp, users[i].level, users[i].regTime);
-    }
-    fclose(fp);
-    if (found) {
+    int removed = rewriteUsersWithoutName(name);
+    if (removed) {
         removeStatsForUser(name);
         removeSaveForUser(name);
+        removeModelKeyForUser(name);
     }
-    return found;
+    return removed;
 }
 
 void resetGuestSessionData() {
     clearModelDuelSession();
     removeStatsForUser("Guest");
     removeSaveForUser("Guest");
+    removeModelKeyForUser("Guest");
     if (strcmp(currentUser, "Guest") == 0) {
         currentUserLevel = 1;
         currentUserExp = 0;
@@ -968,7 +1112,7 @@ int openCurrentSaveFile(FILE** out, long* fsize) {
         }
         fclose(fp);
     }
-    fp = fopenExeRelative(LEGACY_SAVE_FILE, "rb"); // 兼容旧版单存档
+    fp = fopenRuntimeData(LEGACY_SAVE_FILE, "rb"); // 兼容旧版单存档
     if (!fp) return 0;
     fseek(fp, 0, SEEK_END);
     *fsize = ftell(fp);
@@ -1095,7 +1239,8 @@ int hasSaveFile() {
     buildUserSavePath(owner, path, RUNTIME_PATH_MAX);
     if (savePathUsableForCurrentUser(path)) return 1;
     char legacyPath[RUNTIME_PATH_MAX];
-    buildExeRelativePath(LEGACY_SAVE_FILE, legacyPath, RUNTIME_PATH_MAX);
+    migrateRootRuntimeFileToData(LEGACY_SAVE_FILE);
+    buildRuntimeDataPath(LEGACY_SAVE_FILE, legacyPath, RUNTIME_PATH_MAX);
     return savePathUsableForCurrentUser(legacyPath);
 }
 
@@ -1303,7 +1448,7 @@ void loadChallengeBoard(int index) {
 
     int builtByModel = 0;
     if (modelDuelMode && !isGuestUser() && hasModelApiKey()) {
-        builtByModel = tryBuildModelChallengeBoard(index);
+        builtByModel = tryBuildModelChallengeBoardResponsive(index);
         setModelDuelStatus(builtByModel ? L"GLM-5.1 已生成残局" : L"GLM残局失败，本地生成");
     } else if (modelDuelMode) {
         setModelDuelStatus(L"未配置API Key，本地生成残局");
@@ -1339,6 +1484,20 @@ void getMouseCell(int mx, int my, int* col, int* row) {
     if (*col >= BOARD_SIZE) *col = BOARD_SIZE - 1;
     if (*row < 0) *row = 0;
     if (*row >= BOARD_SIZE) *row = BOARD_SIZE - 1;
+}
+
+int getBoardClickCell(int mx, int my, int* col, int* row) {
+    int left = getCellX(0) - CELL_SIZE / 2;
+    int right = getCellX(BOARD_SIZE - 1) + CELL_SIZE / 2;
+    int top = getCellY(0) - CELL_SIZE / 2;
+    int bottom = getCellY(BOARD_SIZE - 1) + CELL_SIZE / 2;
+    if (mx < left || mx > right || my < top || my > bottom) {
+        if (col) *col = -1;
+        if (row) *row = -1;
+        return 0;
+    }
+    getMouseCell(mx, my, col, row);
+    return 1;
 }
 
 /* ===================== 胜负判断 ===================== */
@@ -1777,6 +1936,7 @@ void drawSmallButton(const Button* btn, int hover, int fontSize) {
 
 /* ===================== 右侧信息面板 ===================== */
 void drawInfoPanel(int gameOver, int result, int currentTurn) {
+    (void)result;
     HDC hdc = GetImageHDC(NULL);
     SetBkMode(hdc, TRANSPARENT);
     int px = 770, py = 82, pw = WIN_WIDTH - 810;
@@ -2333,6 +2493,33 @@ int validateModelApiKey() {
     return strstr(response, "\"content\"") != NULL;
 }
 
+struct ValidateKeyJob {
+    volatile LONG done;
+    int result;
+};
+
+DWORD WINAPI validateKeyThreadProc(LPVOID param) {
+    ValidateKeyJob* job = (ValidateKeyJob*)param;
+    job->result = validateModelApiKey();
+    InterlockedExchange(&job->done, 1);
+    return 0;
+}
+
+int validateModelApiKeyResponsive() {
+    ValidateKeyJob job;
+    job.done = 0;
+    job.result = 0;
+    HANDLE thread = CreateThread(NULL, 0, validateKeyThreadProc, &job, 0, NULL);
+    if (!thread) return validateModelApiKey();
+    while (InterlockedCompareExchange(&job.done, 0, 0) == 0) {
+        pumpUiMessages();
+        Sleep(30);
+    }
+    WaitForSingleObject(thread, INFINITE);
+    CloseHandle(thread);
+    return job.result;
+}
+
 int extractAssistantContent(const char* json, char* out, int maxLen) {
     if (!json || !out || maxLen <= 0) return 0;
     out[0] = 0;
@@ -2684,6 +2871,35 @@ int tryBuildModelChallengeBoard(int index) {
     return buildModelChallengeFromContent(content, style);
 }
 
+struct ModelChallengeJob {
+    volatile LONG done;
+    int index;
+    int result;
+};
+
+DWORD WINAPI modelChallengeThreadProc(LPVOID param) {
+    ModelChallengeJob* job = (ModelChallengeJob*)param;
+    job->result = tryBuildModelChallengeBoard(job->index);
+    InterlockedExchange(&job->done, 1);
+    return 0;
+}
+
+int tryBuildModelChallengeBoardResponsive(int index) {
+    ModelChallengeJob job;
+    job.done = 0;
+    job.index = index;
+    job.result = 0;
+    HANDLE thread = CreateThread(NULL, 0, modelChallengeThreadProc, &job, 0, NULL);
+    if (!thread) return tryBuildModelChallengeBoard(index);
+    while (InterlockedCompareExchange(&job.done, 0, 0) == 0) {
+        pumpUiMessages();
+        Sleep(30);
+    }
+    WaitForSingleObject(thread, INFINITE);
+    CloseHandle(thread);
+    return job.result;
+}
+
 
 /* ===================== AI 算法 ===================== */
 int evaluatePointAdvanced(int x, int y, int color) {
@@ -3015,6 +3231,44 @@ int playAITurn(int* lastCol, int* lastRow) {
     return 0;
 }
 
+struct AiTurnJob {
+    volatile LONG done;
+    int result;
+    int lastCol;
+    int lastRow;
+};
+
+DWORD WINAPI aiTurnThreadProc(LPVOID param) {
+    AiTurnJob* job = (AiTurnJob*)param;
+    job->lastCol = -1;
+    job->lastRow = -1;
+    job->result = playAITurn(&job->lastCol, &job->lastRow);
+    InterlockedExchange(&job->done, 1);
+    return 0;
+}
+
+int playAITurnResponsive(int* lastCol, int* lastRow) {
+    if (challengeMode || !modelDuelMode) return playAITurn(lastCol, lastRow);
+    AiTurnJob job;
+    job.done = 0;
+    job.result = -1;
+    job.lastCol = -1;
+    job.lastRow = -1;
+    HANDLE thread = CreateThread(NULL, 0, aiTurnThreadProc, &job, 0, NULL);
+    if (!thread) return playAITurn(lastCol, lastRow);
+    while (InterlockedCompareExchange(&job.done, 0, 0) == 0) {
+        pumpUiMessages();
+        Sleep(30);
+    }
+    WaitForSingleObject(thread, INFINITE);
+    CloseHandle(thread);
+    if (job.lastCol >= 0 && job.lastRow >= 0) {
+        *lastCol = job.lastCol;
+        *lastRow = job.lastRow;
+    }
+    return job.result;
+}
+
 /* ===================== 输入界面 ===================== */
 void inputScreen(const wchar_t* prompt, char* out, int maxLen, int isPassword) {
     int confirmed = 0;
@@ -3101,8 +3355,12 @@ void inputScreen(const wchar_t* prompt, char* out, int maxLen, int isPassword) {
         char utf8Text[1024] = {0};
         GetWindowTextW(edit, wideText, 512);
         int n = WideCharToMultiByte(CP_UTF8, 0, wideText, -1, utf8Text, 1024, NULL, NULL);
-        if (n > 0) safeCopy(out, utf8Text, maxLen);
-        else out[0] = 0;
+        if (n > 0 && n <= maxLen) {
+            safeCopy(out, utf8Text, maxLen);
+        } else {
+            out[0] = 0;
+            if (n > maxLen) MessageBoxW(GetHWnd(), L"输入内容过长，请缩短后重试。", L"提示", MB_OK);
+        }
     } else {
         out[0] = 0;
     }
@@ -3125,7 +3383,7 @@ int promptAndSaveModelApiKey() {
         return 0;
     }
     MessageBoxW(GetHWnd(), L"API Key 已保存，正在验证...", L"模型对局", MB_OK);
-    if (validateModelApiKey()) {
+    if (validateModelApiKeyResponsive()) {
         MessageBoxW(GetHWnd(), L"API Key 验证通过，模型对局已就绪。", L"模型对局", MB_OK);
     } else {
         MessageBoxW(GetHWnd(), L"API Key 保存成功，但验证未通过。请检查网络或 Key 是否有效。", L"模型对局", MB_OK);
@@ -3230,7 +3488,10 @@ int loginScreen() {
                             safeCopy(u.name, name, 64);
                             safeCopy(u.pwdHash, hash, 33);
                             u.exp = 0; u.level = 1; u.regTime = time(NULL);
-                            saveUser(&u);
+                            if (!saveUser(&u)) {
+                                MessageBoxW(GetHWnd(), L"注册保存失败，请确认 data 目录可写且账号未重复。", L"错误", MB_OK);
+                                needRedraw = 1; continue;
+                            }
                             enterUserSession(name, 1, 0);
                             MessageBoxW(GetHWnd(), L"注册成功", L"成功", MB_OK);
                             return 1;
@@ -3274,7 +3535,10 @@ int loginScreen() {
                             }
                             inputScreen(L"请输入管理员密匙", adminKey, 64, 1);
                             if (strlen(adminKey) == 0) { needRedraw = 1; continue; }
-                            loadAdminKey(savedKey, 64);
+                            if (!loadAdminKey(savedKey, 64)) {
+                                MessageBoxW(GetHWnd(), L"管理员密匙尚未配置。请先在 data\\admin_key.txt 中写入密匙。", L"忘记密码", MB_OK);
+                                needRedraw = 1; continue;
+                            }
                             if (strcmp(adminKey, savedKey) != 0) {
                                 MessageBoxW(GetHWnd(), L"管理员密匙错误，密码未重置。", L"错误", MB_OK);
                                 needRedraw = 1; continue;
@@ -3542,7 +3806,7 @@ void gameSettings() {
                                     needRedraw = 1; continue;
                                 }
                                 if (hasModelApiKey()) {
-                                    if (!validateModelApiKey()) {
+                                    if (!validateModelApiKeyResponsive()) {
                                         MessageBoxW(GetHWnd(), L"当前保存的 API Key 验证未通过，请检查网络或重新输入。", L"模型对局", MB_OK);
                                         needRedraw = 1; continue;
                                     }
@@ -3583,7 +3847,7 @@ void gameSettings() {
                                 MessageBoxW(GetHWnd(), L"密码错误，账号未注销。", L"错误", MB_OK);
                                 needRedraw = 1; continue;
                             }
-                            int ans = MessageBoxW(GetHWnd(), L"确认永久注销当前账号？账号、排行榜记录和该账号存档将被删除。", L"注销账号", MB_YESNO);
+                            int ans = MessageBoxW(GetHWnd(), L"确认永久注销当前账号？账号、排行榜记录、该账号存档和 GLM 密钥将被删除。", L"注销账号", MB_YESNO);
                             if (ans == IDYES) {
                                 char deletedName[64];
                                 safeCopy(deletedName, currentUser, 64);
@@ -3720,7 +3984,7 @@ int buildLeaderboardStats(PlayerStat stats[], int maxCount, int modelPage) {
         stats[count].wins = 0; stats[count].losses = 0; stats[count].draws = 0;
         count++;
     }
-    FILE* fp = fopenExeRelative(STATS_FILE, "r");
+    FILE* fp = fopenRuntimeData(STATS_FILE, "r");
     if (fp) {
         char line[256];
         while (fgets(line, sizeof(line), fp)) {
@@ -3844,7 +4108,6 @@ void startGame(int isContinue) {
     int gameOver = 0;
     int result = -1;
     int currentTurn = 1;
-    int drawOffered = 0;
     gameRunning = 1;
     turnPlacedThisRound = 0;
 
@@ -3903,7 +4166,7 @@ void startGame(int isContinue) {
         drawStatusBar(L"");
         FlushBatchDraw();
         Sleep(300);
-        int aiResult = playAITurn(&lastCol, &lastRow);
+        int aiResult = playAITurnResponsive(&lastCol, &lastRow);
         if (aiResult == 1) { gameOver = 1; result = 0; saveStats(0); setAiDialogueBySituation(4); }
         else if (aiResult == 2) { gameOver = 1; result = 2; saveStats(2); setAiDialogueBySituation(5); }
         else { setAiDialogueBySituation(2); }
@@ -3945,7 +4208,10 @@ void startGame(int isContinue) {
             int my = toLogicalY(msg.y);
             if (msg.message == WM_MOUSEMOVE) {
                 int oldCol = hoverCol, oldRow = hoverRow;
-                getMouseCell(mx, my, &hoverCol, &hoverRow);
+                if (!getBoardClickCell(mx, my, &hoverCol, &hoverRow)) {
+                    hoverCol = -1;
+                    hoverRow = -1;
+                }
                 int oldBtn = btnHover;
                 btnHover = -1;
                 for (int i = 0; i < 5; i++) {
@@ -3976,7 +4242,7 @@ void startGame(int isContinue) {
                             undoMove();
                             if (historyCount > 0) { lastCol = history[historyCount-1].x; lastRow = history[historyCount-1].y; }
                             else { lastCol = -1; lastRow = -1; }
-                            currentTurn = playerColor; drawOffered = 0;
+                            currentTurn = playerColor;
                             doRedraw = 1; continue;
                         }
                     } else if (btnClicked == 1) {
@@ -3992,7 +4258,7 @@ void startGame(int isContinue) {
                         if (challengeMode) {
                             loadChallengeBoard(challengeIndex);
                             gameOver = 0; result = -1; lastCol = -1; lastRow = -1;
-                            currentTurn = playerColor; drawOffered = 0;
+                            currentTurn = playerColor;
                             doRedraw = 1; continue;
                         }
                         if (modelDuelMode) {
@@ -4001,7 +4267,7 @@ void startGame(int isContinue) {
                                 initBoard();
                                 setModelDuelStatus(L"GLM-5.1 已就绪");
                                 gameOver = 0; result = -1; lastCol = -1; lastRow = -1;
-                                currentTurn = playerColor; drawOffered = 0;
+                                currentTurn = playerColor;
                                 if (playerColor == 2) {
                                     aiThinking = 1;
                                     redrawScene(-1, -1, lastCol, lastRow, gameOver, result);
@@ -4009,7 +4275,7 @@ void startGame(int isContinue) {
                                     for (int i = 0; i < 5; i++) drawSmallButton(bottomBtns[i], -1, 16);
                                     drawStatusBar(L""); FlushBatchDraw();
                                     Sleep(300);
-                                    int aiResult = playAITurn(&lastCol, &lastRow);
+                                    int aiResult = playAITurnResponsive(&lastCol, &lastRow);
                                     if (aiResult == 1) { gameOver = 1; result = 0; saveStats(0); }
                                     else if (aiResult == 2) { gameOver = 1; result = 2; saveStats(2); }
                                     currentTurn = playerColor;
@@ -4055,7 +4321,7 @@ void startGame(int isContinue) {
                     if (challengeMode) loadChallengeBoard(challengeIndex);
                     else initBoard();
                     if (!challengeMode && modelDuelMode) setModelDuelStatus(L"GLM-5.1 已就绪");
-                    gameOver = 0; result = -1; lastCol = -1; lastRow = -1; drawOffered = 0;
+                    gameOver = 0; result = -1; lastCol = -1; lastRow = -1;
                     currentTurn = playerColor;
                     setAiDialogueBySituation(0);
                     if (!challengeMode && playerColor == 2) {
@@ -4065,7 +4331,7 @@ void startGame(int isContinue) {
                         for (int i = 0; i < 5; i++) drawSmallButton(bottomBtns[i], -1, 16);
                         drawStatusBar(L""); FlushBatchDraw();
                         Sleep(300);
-                        int aiResult = playAITurn(&lastCol, &lastRow);
+                        int aiResult = playAITurnResponsive(&lastCol, &lastRow);
                         if (aiResult == 1) { gameOver = 1; result = 0; saveStats(0); }
                         else if (aiResult == 2) { gameOver = 1; result = 2; saveStats(2); }
                         currentTurn = playerColor;
@@ -4077,7 +4343,7 @@ void startGame(int isContinue) {
                 if (aiThinking) continue;
                 if (currentTurn != playerColor) continue;
                 int col, row;
-                getMouseCell(mx, my, &col, &row);
+                if (!getBoardClickCell(mx, my, &col, &row)) continue;
                 if (board[row][col] != 0) continue;
                 if (useForbidden && playerColor == 1 && isForbiddenMove(col, row, 1)) {
                     MessageBoxW(GetHWnd(), L"禁手！此乃天道所不容之棋。", L"违规", MB_OK);
@@ -4087,7 +4353,6 @@ void startGame(int isContinue) {
                 lastCol = col; lastRow = row;
                 turnPlacedThisRound++;
                 if (challengeMode) challengePlayerMoves = countChallengePlayerMoves();
-                drawOffered = 0;
                 setAiDialogueBySituation(1);
                 playSoundEffect(0);
                 redrawScene(hoverCol, hoverRow, lastCol, lastRow, gameOver, result);
@@ -4124,7 +4389,7 @@ void startGame(int isContinue) {
                 drawStatusBar(L""); FlushBatchDraw();
                 aiThinking = 1;
                 Sleep(200);
-                int aiResult = playAITurn(&lastCol, &lastRow);
+                int aiResult = playAITurnResponsive(&lastCol, &lastRow);
                 if (!gameOver) setAiDialogueBySituation(2);
                 currentTurn = playerColor; stepStartTime = GetTickCount();
                 redrawScene(hoverCol, hoverRow, lastCol, lastRow, gameOver, result);
@@ -4175,7 +4440,7 @@ void startChallenge(int index) {
 /* ===================== 主函数 ===================== */
 int main() {
     srand((unsigned)time(NULL));
-    ensureAdminKeyFile();
+    migrateFixedRuntimeFilesToData();
     initgraph(WIN_WIDTH, WIN_HEIGHT);
     lockWindowSize();
     setbkcolor(RGB(20, 20, 20));
