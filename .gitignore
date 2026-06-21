@@ -1,4 +1,4 @@
-# Runtime data and local secrets
+# Browser and local data
 data/
 users.dat
 stats.dat
@@ -7,7 +7,7 @@ save_*.dat
 admin_key.txt
 glm_key_*.dat
 
-# Build outputs
+# Legacy build outputs (C++ / EasyX)
 *.exe
 *.o
 *.obj
@@ -17,12 +17,23 @@ glm_key_*.dat
 build/
 dist/
 
-# Editor and OS local files
-.vscode/*
-!.vscode/tasks.json
-!.vscode/launch.json
+# Editor and IDE
+.vscode/
 .vs/
+.idea/
 *.user
 *.suo
+
+# OS files
 Thumbs.db
 desktop.ini
+.DS_Store
+
+# Node (if future tooling)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Temp files
+*.tmp
+*.log
