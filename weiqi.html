@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>凡人修仙传 · 围棋</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+@font-face{font-family:'XianFont';src:local('SimHei'),local('Microsoft YaHei');}
+body{background:#141416;color:#f0f0e6;font-family:'XianFont','SimHei','Microsoft YaHei',sans-serif;overflow:hidden;width:100vw;height:100vh;margin:0;padding:0;}
+#app{position:relative;width:100vw;height:100vh;overflow:hidden;}
+.screen{position:absolute;top:0;left:0;width:100%;height:100%;display:none;}
+.screen.active{display:block;}
+.bg-layer{position:absolute;top:0;left:0;width:100%;height:100%;background-size:cover;background-position:center;z-index:0;}
+.screen-content{position:relative;z-index:1;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;}
+.btn{background:rgb(45,38,30);border:2px solid rgb(180,160,120);border-radius:16px;color:#f0f0e6;font-size:22px;font-family:inherit;cursor:pointer;text-align:center;display:flex;align-items:center;justify-content:center;line-height:1;transition:all 0.15s;}
+.btn:hover{background:rgb(85,68,48);border-color:rgb(255,215,0);color:rgb(255,215,0);}
+.btn-game{background:rgba(45,38,30,0.8);border:1px solid rgb(80,65,45);border-radius:10px;color:#f0f0e6;font-size:16px;font-family:inherit;cursor:pointer;padding:8px 16px;display:flex;align-items:center;justify-content:center;transition:all 0.15s;}
+.btn-game:hover{border-color:rgb(255,215,0);color:rgb(255,215,0);}
+.dialog-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:100;display:none;justify-content:center;align-items:center;cursor:pointer;}
+.dialog-overlay.active{display:flex;}
+.dialog-box{background:rgb(15,15,22);border:2px solid rgb(160,140,100);border-radius:14px;padding:30px 40px;min-width:380px;text-align:center;}
+.dialog-box h3{color:rgb(255,215,0);font-size:26px;margin-bottom:20px;}
+.dialog-box input{width:100%;padding:10px 14px;font-size:18px;background:rgb(30,30,30);border:1px solid rgb(180,160,120);border-radius:8px;color:#f0f0e6;font-family:inherit;margin-bottom:16px;outline:none;}
+.dialog-box input:focus{border-color:rgb(255,215,0);}
+.dialog-box .btn-row{display:flex;gap:12px;justify-content:center;margin-top:8px;}
+.dialog-box .btn-row .btn{position:static;width:100px;height:42px;line-height:normal;}
+.game-bg{background-color:rgb(0,0,0);}
+.game-board-area{position:absolute;top:0;left:0;width:820px;height:100%;}
+#gameCanvas{position:absolute;top:0;left:0;opacity:0.88;}
+.info-panel{position:absolute;top:56px;left:830px;right:10px;bottom:10px;background:rgba(15,15,22,0.85);border:2px solid rgb(160,140,100);border-radius:14px;padding:16px 10px;display:flex;flex-direction:column;align-items:center;overflow-y:auto;}
+.info-title{color:rgb(255,215,0);font-size:26px;margin-bottom:10px;text-align:center;}
+.info-line{color:#f0f0e6;font-size:17px;margin:4px 0;text-align:center;width:100%;}
+.info-line.gold{color:rgb(255,215,0);}
+.info-line.red{color:rgb(255,120,100);}
+.info-sep{width:80%;height:1px;background:rgb(72,62,48);margin:6px auto;}
+.info-sep2{width:70%;height:1px;background:rgb(100,85,58);margin:8px auto;}
+.game-buttons{position:absolute;top:8px;left:830px;right:10px;height:40px;display:flex;flex-direction:row;gap:6px;z-index:10;}
+.game-buttons .btn-game{flex:1;height:36px;font-size:14px;padding:6px 0;border-radius:8px;justify-content:center;}
+.settings-title{position:absolute;top:42px;width:100%;text-align:center;font-size:34px;color:rgb(255,215,0);text-shadow:2px 2px 4px #000;}
+.settings-subtitle{position:absolute;top:84px;width:100%;text-align:center;font-size:17px;color:rgb(220,205,160);}
+.settings-list{position:absolute;top:180px;left:50%;transform:translateX(-50%);width:360px;}
+.settings-list .btn{position:relative;width:100%;height:42px;margin-bottom:8px;font-size:17px;}
+.stats-title{position:absolute;top:48px;width:100%;text-align:center;font-size:36px;color:rgb(255,215,0);text-shadow:2px 2px 4px #000;}
+.stats-tabs{position:absolute;bottom:92px;left:50%;transform:translateX(-50%);display:flex;gap:20px;}
+.stats-tabs .btn{position:static;width:200px;height:46px;}
+.stats-panel{position:absolute;top:150px;left:150px;right:150px;bottom:160px;background:rgb(14,14,22);border:2px solid rgb(160,140,100);border-radius:14px;padding:30px 40px;}
+.stats-section-title{color:rgb(255,215,0);font-size:22px;margin:16px 0 8px;}
+.lb-title{position:absolute;top:34px;width:100%;text-align:center;font-size:38px;color:rgb(255,215,0);text-shadow:2px 2px 4px #000;}
+.lb-panel{position:absolute;top:94px;left:120px;right:120px;bottom:160px;background:rgb(14,14,22);border:2px solid rgb(160,140,100);border-radius:14px;padding:20px 30px;overflow-y:auto;}
+.lb-header{display:flex;padding:8px 0;border-bottom:1px solid rgb(72,62,48);margin-bottom:8px;}
+.lb-header span{flex:1;color:rgb(255,215,0);font-size:20px;}
+.lb-row{display:flex;padding:8px 0;border-bottom:1px solid rgba(72,62,48,0.3);font-size:18px;}
+.lb-row span{flex:1;color:#f0f0e6;}
+.lb-row.self{color:rgb(255,215,0);}
+.lb-row.self span{color:rgb(255,215,0);}
+.lb-tabs{position:absolute;bottom:92px;left:50%;transform:translateX(-50%);display:flex;gap:12px;}
+.lb-tabs .btn{position:static;width:180px;height:46px;}
+.result-overlay{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.5);z-index:1000;display:none;justify-content:center;align-items:center;opacity:0;transition:opacity 0.3s;}
+.result-overlay.active{display:flex;}
+.result-overlay.visible{opacity:1;}
+.result-overlay.win-bg{background:url('bg_win.png') center/cover no-repeat,rgba(0,0,0,0.4);}
+.result-overlay.lose-bg{background:url('bg_lose.png') center/cover no-repeat,rgba(0,0,0,0.4);}
+.result-overlay.draw-bg{background:rgba(0,0,0,0.6);}
+.result-box{background:rgba(15,15,22,0.92);border:2px solid rgb(160,140,100);border-radius:18px;padding:36px 48px;text-align:center;min-width:420px;z-index:51;position:relative;box-shadow:0 8px 32px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,215,0,0.1);}
+.result-box .title{font-size:38px;margin-bottom:12px;text-shadow:0 2px 8px rgba(0,0,0,0.5);}
+.result-box .title.win{color:rgb(255,215,0);text-shadow:0 2px 12px rgba(255,215,0,0.4);}
+.result-box .title.lose{color:rgb(255,120,100);text-shadow:0 2px 12px rgba(255,80,60,0.3);}
+.result-box .title.draw{color:#f0f0e6;text-shadow:0 2px 8px rgba(255,255,255,0.2);}
+.result-box .sep{width:60%;height:1px;background:linear-gradient(90deg,transparent,rgb(160,140,100),transparent);margin:14px auto;}
+.result-box .line{color:rgb(220,205,160);font-size:17px;margin:10px 0;line-height:1.6;}
+.result-box .line:first-of-type{color:rgb(240,230,200);}
+.result-box .btn-continue{display:inline-block;color:rgb(255,215,0);font-size:18px;margin-top:18px;padding:10px 36px;border:1px solid rgb(180,160,100);border-radius:10px;cursor:pointer;background:rgba(45,38,30,0.6);transition:all 0.2s;font-family:inherit;}
+.result-box .btn-continue:hover{background:rgba(85,68,48,0.8);border-color:rgb(255,215,0);box-shadow:0 0 12px rgba(255,215,0,0.2);}
+.btn-go-end{width:64px;height:64px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#555,#111 60%,#000);border:3px solid #888;box-shadow:0 4px 12px rgba(0,0,0,0.6),inset 0 -3px 6px rgba(255,255,255,0.08),inset 0 3px 6px rgba(255,255,255,0.15);cursor:pointer;margin-top:16px;transition:all 0.2s;display:flex;align-items:center;justify-content:center;color:rgb(255,215,0);font-size:13px;font-weight:bold;font-family:inherit;text-shadow:0 1px 2px rgba(0,0,0,0.8);user-select:none;}
+.btn-go-end:hover{box-shadow:0 4px 16px rgba(255,215,0,0.3),inset 0 -3px 6px rgba(255,255,255,0.08),inset 0 3px 6px rgba(255,255,255,0.15);border-color:rgb(255,215,0);}
+.btn-go-end:active{transform:scale(0.95);box-shadow:0 2px 6px rgba(0,0,0,0.8),inset 0 2px 4px rgba(0,0,0,0.3);}
+.timer-countdown{position:absolute;bottom:100px;left:calc(50% + 410px);transform:translateX(-50%);width:140px;background:rgba(15,15,22,0.9);border:2px solid rgb(180,160,120);border-radius:8px;padding:4px 20px;text-align:center;display:none;z-index:11;}
+.timer-countdown .time-display{font-size:22px;color:rgb(255,215,0);font-weight:bold;font-family:'Courier New',monospace;line-height:1.2;}
+.timer-countdown .time-display.urgent{color:rgb(255,80,60);}
+.timer-countdown .time-label{font-size:11px;color:rgb(180,160,120);margin-top:1px;line-height:1.2;}
+.btn:active,.btn-game:active{transform:scale(0.96);filter:brightness(0.85);}
+.btn,.btn-game{touch-action:manipulation;-webkit-tap-highlight-color:transparent;}
+@media(max-width:1100px){.game-board-area{width:100vw;}#gameCanvas{width:100vw;height:auto;}.info-panel{left:0;right:0;top:auto;bottom:0;height:180px;border-radius:14px 14px 0 0;}.game-buttons{left:0;right:0;top:auto;bottom:180px;height:40px;flex-direction:row;}.timer-countdown{left:0;right:0;bottom:225px;}}
+@media(max-width:760px){.btn{font-size:18px;padding:10px 16px;}.info-panel{font-size:14px;}.lb-panel{left:20px;right:20px;}.stats-panel{left:20px;right:20px;}.settings-list{width:90%;}}
+</style>
+</head>
+<body>
+<div id="app">
+<div id="screenLogin" class="screen active">
+  <div class="bg-layer" style="background-image:url('bg_login.png')"></div>
+  <div class="screen-content" style="justify-content:center;gap:14px;padding-top:60px;">
+    <div style="position:absolute;top:10%;width:100%;text-align:center;">
+      <div style="font-size:48px;color:rgb(255,215,0);text-shadow:2px 2px 4px #000,0 0 20px rgba(255,215,0,0.3);letter-spacing:8px;">凡人修仙传 · 围棋</div>
+    </div>
+    <div class="btn" style="width:260px;height:52px;" onclick="showLoginDialog('login')">登录</div>
+    <div class="btn" style="width:260px;height:52px;" onclick="showLoginDialog('register')">注册</div>
+    <div class="btn" style="width:260px;height:52px;" onclick="showLoginDialog('changePwd')">修改密码</div>
+    <div class="btn" style="width:260px;height:52px;" onclick="showLoginDialog('forgotPwd')">忘记密码</div>
+    <div class="btn" style="width:260px;height:52px;" onclick="guestLogin()">游客登录</div>
+  </div>
+</div>
+<div id="screenMenu" class="screen">
+  <div class="bg-layer" style="background-image:url('bg_menu.png')"></div>
+  <div class="screen-content" style="justify-content:center;gap:10px;padding-top:60px;">
+    <div style="position:absolute;top:6%;width:100%;text-align:center;">
+      <div style="font-size:44px;color:rgb(255,215,0);text-shadow:2px 2px 4px #000,0 0 20px rgba(255,215,0,0.3);letter-spacing:6px;">凡人修仙传</div>
+      <div id="menuSubtitle" style="font-size:34px;color:#f0f0e6;text-shadow:2px 2px 4px #000;margin-top:8px;">天机对局</div>
+    </div>
+    <div class="btn" style="width:260px;height:52px;" onclick="menuAction(1)">开始游戏</div>
+    <div class="btn" style="width:260px;height:52px;" onclick="menuAction(2)">继续游戏</div>
+    <div class="btn" style="width:260px;height:52px;" onclick="menuAction(3)">游戏设置</div>
+    <div class="btn" style="width:260px;height:52px;" onclick="menuAction(4)">个人数据</div>
+    <div class="btn" style="width:260px;height:52px;" onclick="menuAction(5)">排行榜</div>
+    <div class="btn" style="width:260px;height:52px;" onclick="menuAction(6)">切换账号</div>
+    <div class="btn" style="width:260px;height:52px;" onclick="menuAction(7)">退出游戏</div>
+  </div>
+</div>
+<div id="screenGame" class="screen">
+  <div class="bg-layer game-bg" style="background-image:url('bg_game.png')"></div>
+  <div class="screen-content">
+    <div class="game-board-area">
+      <canvas id="gameCanvas" width="820" height="820"></canvas>
+    </div>
+    <div class="info-panel" id="infoPanel"></div>
+    <div class="timer-countdown" id="timerCountdown"><div class="time-display" id="timerDisplay">60</div><div class="time-label">剩余秒数</div></div>
+    <div class="game-buttons">
+      <div class="btn-game" onclick="gamePass()">虚手</div>
+      <div class="btn-game" onclick="gameUndo()">悔棋</div>
+      <div class="btn-game" onclick="gameGiveUp()">认输</div>
+      <div class="btn-game" id="btnSaveOrChange" onclick="gameSaveOrChange()">存档</div>
+      <div class="btn-game" onclick="gameBackToMenu()">返回</div>
+    </div>
+  </div>
+</div>
+<div id="screenSettings" class="screen">
+  <div class="bg-layer" style="background-image:url('bg_menu.png')"></div>
+  <div class="screen-content">
+    <div class="settings-title">游戏设置</div>
+    <div class="settings-subtitle" id="settingsSubtitle"></div>
+    <div class="settings-list" id="settingsList"></div>
+  </div>
+</div>
+<div id="screenStats" class="screen">
+  <div class="bg-layer" style="background-image:url('bg_menu.png')"></div>
+  <div class="screen-content">
+    <div class="stats-title" id="statsTitle">个人数据 · 天机</div>
+    <div class="stats-panel" id="statsPanel"></div>
+    <div class="stats-tabs">
+      <div class="btn" id="btnStatsTianji" onclick="statsTab(0)">天机数据</div>
+      <div class="btn" id="btnStatsModel" onclick="statsTab(1)">模型对局</div>
+      <div class="btn" onclick="statsReset()">重置本页</div>
+      <div class="btn" onclick="showScreen('screenMenu')">返回</div>
+    </div>
+  </div>
+</div>
+<div id="screenLeaderboard" class="screen">
+  <div class="bg-layer" style="background-image:url('bg_menu.png')"></div>
+  <div class="screen-content">
+    <div class="lb-title" id="lbTitle">天机困难排行榜</div>
+    <div class="lb-panel" id="lbPanel"></div>
+    <div class="lb-tabs">
+      <div class="btn" id="btnLbTianji" onclick="lbTab(0)">天机困难榜</div>
+      <div class="btn" id="btnLbModel" onclick="lbTab(1)">模型对局榜</div>
+      <div class="btn" onclick="showScreen('screenMenu')">返回</div>
+    </div>
+  </div>
+</div>
+<div class="dialog-overlay" id="dialogOverlay" onclick="if(event.target===this)dialogCancel()">
+  <div class="dialog-box">
+    <h3 id="dialogTitle"></h3>
+    <input type="text" id="dialogInput1" style="display:none" autocomplete="off">
+    <input type="password" id="dialogInput2" style="display:none" autocomplete="new-password">
+    <input type="password" id="dialogInput3" style="display:none" autocomplete="new-password">
+    <div class="btn-row">
+      <div class="btn" onclick="dialogConfirm()">确定</div>
+      <div class="btn" onclick="dialogCancel()">取消</div>
+    </div>
+  </div>
+</div>
+<div class="result-overlay" id="resultOverlay">
+  <div class="result-box" id="resultBox"></div>
+</div>
+<audio id="bgmOut" loop preload="auto"><source src="bgm_out.mp3" type="audio/mpeg"></audio>
+<audio id="bgmIn" loop preload="auto"><source src="bgm_in.mp3" type="audio/mpeg"></audio>
+</div>
+
+<script>
+const BOARD_SIZE=19, CELL_SIZE=38, MARGIN=36;
+const KOMI=6.5, SAVE_VERSION=20260623;
+let board=[], moveHistory=[], historyCount=0, captures=[0,0];
+let passCount=0, koPos=null;
+let currentUser='', currentUserLevel=1, currentUserExp=0;
+let difficulty=2, playerColor=1, aiColor=2;
+let soundOn=1, gameRunning=0, stepCount=0, bgmOn=0;
+let showHints=1, modelDuelMode=0, modelDuelPlayerScore=0, modelDuelModelScore=0, modelDuelDrawScore=0;
+let modelDuelStatus='', modelDuelConnected=0, aiDialogueText='';
+let ollamaUrl='http://localhost:11434', ollamaModel='qwen3:8b';
+let hoverCol=-1, hoverRow=-1, lastCol=-1, lastRow=-1;
+let gameOver=0, result=-1, currentTurn=1, aiThinking=0;
+let stepStartTime=0, timeLimit=0, dialogCallback=null;
+let statsPage=0, lbType=0, canvas, ctx;
+
+function getXianLevelName(exp){const l=[[50,'炼气初期'],[100,'炼气中期'],[150,'炼气后期'],[250,'筑基初期'],[350,'筑基中期'],[500,'筑基后期'],[700,'结丹初期'],[900,'结丹中期'],[1200,'结丹后期'],[1500,'元婴初期'],[1900,'元婴中期'],[2400,'元婴后期'],[3000,'化神初期'],[3700,'化神中期'],[4500,'化神后期'],[5400,'炼虚初期'],[6400,'炼虚中期'],[7500,'炼虚后期'],[8700,'合体初期'],[10000,'合体中期'],[12000,'合体后期'],[15000,'大乘初期'],[20000,'大乘中期'],[30000,'大乘后期'],[50000,'渡劫期']];for(const[t,n]of l)if(exp<t)return n;return'真仙';}
+function simpleHash(s){let h=0;for(let i=0;i<s.length;i++)h=((h<<5)-h+s.charCodeAt(i))|0;return h>>>0;}
+function hashPassword(p,s){let h1=simpleHash(p),h2=simpleHash(s);let h3=(h1^(h2+0x9e3779b9+(h1<<6)+(h1>>>2)))>>>0;let h4=(h3^0xA5A5A5A5)>>>0;let o='';for(let i=0;i<8;i++){let v=(h3>>>(i*4))&0xF;o+=v<10?v:String.fromCharCode(55+v);}for(let i=0;i<8;i++){let v=(h4>>>(i*4))&0xF;o+=v<10?v:String.fromCharCode(55+v);}return o;}
+function makeStoredPassword(p,s){return'H1_'+hashPassword(p,s);}
+function loadUsers(){try{return JSON.parse(localStorage.getItem('weiqi_users')||'[]');}catch(e){return[];}}
+function saveUsers(u){localStorage.setItem('weiqi_users',JSON.stringify(u));}
+function loadStats(){try{return JSON.parse(localStorage.getItem('weiqi_stats')||'[]');}catch(e){return[];}}
+function saveStatsList(s){localStorage.setItem('weiqi_stats',JSON.stringify(s));}
+function findUser(n){return loadUsers().find(u=>u.name===n);}
+function updateUser(u){let us=loadUsers();let i=us.findIndex(x=>x.name===u.name);if(i>=0)us[i]=u;else us.push(u);saveUsers(us);}
+function deleteUser(n){let us=loadUsers().filter(u=>u.name!==n);saveUsers(us);let st=loadStats().filter(s=>s.user!==n);saveStatsList(st);localStorage.removeItem('weiqi_save_'+simpleHash(n));}
+function isGuest(){return!currentUser||currentUser==='Guest';}
+function enterSession(n,l,e){currentUser=n||'Guest';currentUserLevel=l||1;currentUserExp=e||0;modelDuelMode=0;modelDuelPlayerScore=0;modelDuelModelScore=0;modelDuelDrawScore=0;modelDuelStatus='';}
+function isValidUsername(n){if(!n||n.length<1||n.length>16||n==='Guest')return false;return/^[\u4e00-\u9fa5a-zA-Z0-9_]+$/.test(n);}
+function isValidPassword(p){return p&&p.length>=4&&p.length<=31&&p.trim().length>0;}
+function addStatRecord(r){if(modelDuelMode){let playerWin=(r===1&&playerColor===1)||(r===0&&playerColor===2);let modelWin=(r===1&&playerColor===2)||(r===0&&playerColor===1);if(playerWin)modelDuelPlayerScore++;else if(modelWin)modelDuelModelScore++;else modelDuelDrawScore++;saveModelDuelScore();}let s=loadStats();s.push({user:currentUser,difficulty,result:r,time:Math.floor(Date.now()/1000),steps:stepCount,mode:0,modelFlag:modelDuelMode?1:0});saveStatsList(s);if(!isGuest()){let d=5;if(r===1)d=18+difficulty*6;else if(r===2)d=8+difficulty*2;let u=findUser(currentUser);if(u){u.exp+=d;u.level=1+Math.floor(u.exp/100);updateUser(u);currentUserExp=u.exp;currentUserLevel=u.level;}}}
+function saveModelDuelScore(){localStorage.setItem('weiqi_duelscore_'+simpleHash(currentUser),JSON.stringify({p:modelDuelPlayerScore,m:modelDuelModelScore,d:modelDuelDrawScore}));}
+function loadModelSettings(){let u=localStorage.getItem('weiqi_ollama_url');if(u)ollamaUrl=u;let m=localStorage.getItem('weiqi_ollama_model');if(m)ollamaModel=m;}
+function saveModelSettings(){localStorage.setItem('weiqi_ollama_url',ollamaUrl);localStorage.setItem('weiqi_ollama_model',ollamaModel);}
+
+// ===== Go Board Logic =====
+function isInside(x,y){return x>=0&&x<BOARD_SIZE&&y>=0&&y<BOARD_SIZE;}
+function initBoard(){board=Array.from({length:BOARD_SIZE},()=>Array(BOARD_SIZE).fill(0));moveHistory=[];historyCount=0;captures=[0,0];passCount=0;koPos=null;stepCount=0;stepStartTime=Date.now();aiThinking=0;}
+function getGroup(x,y){
+  let color=board[y][x];if(color===0)return null;
+  let visited=Array.from({length:BOARD_SIZE},()=>Array(BOARD_SIZE).fill(false));
+  let stones=[],liberties=new Set();
+  let stack=[[x,y]];visited[y][x]=true;
+  while(stack.length){
+    let[cx,cy]=stack.pop();stones.push([cx,cy]);
+    for(let[dx,dy]of[[1,0],[-1,0],[0,1],[0,-1]]){
+      let nx=cx+dx,ny=cy+dy;
+      if(!isInside(nx,ny))continue;
+      if(board[ny][nx]===0)liberties.add(nx+','+ny);
+      else if(board[ny][nx]===color&&!visited[ny][nx]){visited[ny][nx]=true;stack.push([nx,ny]);}
+    }
+  }
+  return{stones,liberties};
+}
+function removeGroup(stones){for(let[x,y]of stones)board[y][x]=0;}
+function playMove(x,y,color){
+  if(!isInside(x,y)||board[y][x]!==0)return false;
+  if(koPos&&(x===koPos[0]&&y===koPos[1]))return false;
+  board[y][x]=color;let captured=[];
+  for(let[dx,dy]of[[1,0],[-1,0],[0,1],[0,-1]]){
+    let nx=x+dx,ny=y+dy;
+    if(isInside(nx,ny)&&board[ny][nx]===3-color){
+      let g=getGroup(nx,ny);
+      if(g&&g.liberties.size===0){captured.push(...g.stones);removeGroup(g.stones);}
+    }
+  }
+  captures[color-1]+=captured.length;
+  let self=getGroup(x,y);
+  if(self&&self.liberties.size===0){board[y][x]=0;for(let[cx,cy]of captured)board[cy][cx]=3-color;return false;}
+  if(captured.length===1&&self&&self.stones.length===1){koPos=[x,y];}else{koPos=null;}
+  moveHistory.push({x,y,color,capturedStones:captured.map(s=>({x:s[0],y:s[1],color:3-color}))});historyCount++;stepCount++;passCount=0;
+  return true;
+}
+function passMove(){moveHistory.push({x:-1,y:-1,color:currentTurn,capturedStones:[]});historyCount++;passCount++;koPos=null;currentTurn=3-currentTurn;}
+function undoMove(){
+  if(moveHistory.length===0)return false;
+  let last=moveHistory.pop();historyCount--;stepCount--;
+  if(last.x===-1){passCount--;currentTurn=last.color;return true;}
+  board[last.y][last.x]=0;
+  for(let cs of last.capturedStones){board[cs.y][cs.x]=cs.color;captures[last.color-1]--;}  currentTurn=last.color;koPos=null;
+  return true;
+}
+function countScore(color){
+  let visited=Array.from({length:BOARD_SIZE},()=>Array(BOARD_SIZE).fill(false));
+  let territory=0;
+  for(let y=0;y<BOARD_SIZE;y++)for(let x=0;x<BOARD_SIZE;x++){
+    if(board[y][x]===color){territory++;continue;}
+    if(board[y][x]!==0||visited[y][x])continue;
+    let stack=[[x,y]];visited[y][x]=true;let region=[];let owner=0;let ok=true;
+    while(stack.length){
+      let[cx,cy]=stack.pop();region.push([cx,cy]);
+      for(let[dx,dy]of[[1,0],[-1,0],[0,1],[0,-1]]){
+        let nx=cx+dx,ny=cy+dy;
+        if(!isInside(nx,ny)){ok=false;continue;}
+        if(board[ny][nx]===0&&!visited[ny][nx]){visited[ny][nx]=true;stack.push([nx,ny]);}
+        else if(board[ny][nx]!==0){if(owner===0)owner=board[ny][nx];else if(owner!==board[ny][nx])ok=false;}
+      }
+    }
+    if(ok&&owner===color)territory+=region.length;
+  }
+  return territory;
+}
+function getScoreText(){
+  let hasStones=false;for(let y=0;y<BOARD_SIZE;y++)for(let x=0;x<BOARD_SIZE;x++)if(board[y][x]!==0)hasStones=true;
+  if(!hasStones)return{black:'开局，尚未落子',blackScore:0,whiteScore:KOMI};
+  let blackScore=countScore(1)+captures[0];
+  let whiteScore=countScore(2)+captures[1]+KOMI;
+  let diff=Math.abs(blackScore-whiteScore);
+  let text=diff<0.5?'和棋':(blackScore>whiteScore?'黑胜'+diff.toFixed(1)+'目':'白胜'+diff.toFixed(1)+'目');
+  return{black:'黑 '+blackScore+' : 白 '+whiteScore+' ('+text+')',blackScore,whiteScore};
+}
+
+// ===== AI =====
+const STAR_POINTS=[[3,3],[3,9],[3,15],[9,3],[9,9],[9,15],[15,3],[15,9],[15,15]];
+function countStones(){let n=0;for(let y=0;y<BOARD_SIZE;y++)for(let x=0;x<BOARD_SIZE;x++)if(board[y][x]!==0)n++;return n;}
+function evaluatePoint(x,y,color){
+  if(board[y][x]!==0)return 0;
+  let opColor=3-color,score=0;
+  board[y][x]=color;
+  let g=getGroup(x,y);
+  if(!g){board[y][x]=0;return 0;}
+  let libs=g.liberties.size;
+  if(libs===0){board[y][x]=0;return -9999;}
+  if(libs===1)score-=120;
+  else if(libs===2)score+=10;
+  else if(libs===3)score+=50;
+  else score+=80;
+  let adjSame=0,adjOpp=0;
+  for(let[dx,dy]of[[1,0],[-1,0],[0,1],[0,-1]]){
+    let nx=x+dx,ny=y+dy;
+    if(!isInside(nx,ny))continue;
+    if(board[ny][nx]===color)adjSame++;
+    else if(board[ny][nx]===opColor)adjOpp++;
+  }
+  if(adjSame===0)score+=15;
+  else if(adjSame===1)score+=25;
+  else score+=adjSame*8;
+  if(adjOpp>=1&&adjSame>=1)score+=30;
+  if(libs<=2&&g.stones.length>=3)score+=100;
+  for(let[dx,dy]of[[1,0],[-1,0],[0,1],[0,-1]]){
+    let nx=x+dx,ny=y+dy;
+    if(!isInside(nx,ny))continue;
+    if(board[ny][nx]===opColor){
+      let eg=getGroup(nx,ny);
+      if(eg&&eg.liberties.size===1)score+=350+eg.stones.length*150;
+      else if(eg&&eg.liberties.size===2)score+=50;
+    }
+  }
+  board[y][x]=0;
+  let edgeDist=Math.min(x,y,18-x,18-y);
+  let totalStones=countStones();
+  if(totalStones<12){
+    for(let[sx,sy]of STAR_POINTS){if(x===sx&&y===sy){score+=100;break;}}
+    if(edgeDist===0)score-=30;
+    else if(edgeDist===1)score+=40;
+    else if(edgeDist===2)score+=50;
+    else if(edgeDist===3)score+=30;
+    else score-=10;
+  }else if(totalStones<40){
+    if(edgeDist===0)score+=5;
+    else if(edgeDist===1)score+=20;
+    else if(edgeDist===2)score+=15;
+    let cx=Math.abs(x-9),cy=Math.abs(y-9);
+    if(cx<=5&&cy<=5)score+=10;
+  }else{
+    if(edgeDist===0)score+=10;
+    else if(edgeDist===1)score+=15;
+  }
+  return score;
+}
+function generateMoves(maxMoves,color){
+  let nearby=Array.from({length:BOARD_SIZE},()=>Array(BOARD_SIZE).fill(0));
+  let hasStone=false;
+  for(let y=0;y<BOARD_SIZE;y++)for(let x=0;x<BOARD_SIZE;x++){
+    if(board[y][x]!==0){hasStone=true;for(let dy=-3;dy<=3;dy++)for(let dx=-3;dx<=3;dx++){let nx=x+dx,ny=y+dy;if(isInside(nx,ny))nearby[ny][nx]=1;}}
+  }
+  if(!hasStone)return[[9,9]];
+  let cands=[],opColor=3-color;
+  for(let y=0;y<BOARD_SIZE;y++)for(let x=0;x<BOARD_SIZE;x++){
+    if(board[y][x]!==0||!nearby[y][x])continue;
+    let s=evaluatePoint(x,y,color);
+    board[y][x]=color;let g=getGroup(x,y);
+    if(!g||g.liberties.size===0){board[y][x]=0;continue;}
+    if(g.liberties.size===1)s-=100;
+    for(let[dx,dy]of[[1,0],[-1,0],[0,1],[0,-1]]){
+      let nx=x+dx,ny=y+dy;
+      if(isInside(nx,ny)&&board[ny][nx]===opColor){
+        let eg=getGroup(nx,ny);
+        if(eg&&eg.liberties.size===1)s+=250+eg.stones.length*120;
+        else if(eg&&eg.liberties.size===2)s+=30;
+      }
+    }
+    board[y][x]=opColor;let eg=getGroup(x,y);
+    if(eg&&eg.liberties.size===1)s+=700;
+    else if(eg&&eg.liberties.size===2)s+=80;
+    board[y][x]=0;
+    cands.push({x,y,s});
+  }
+  cands.sort((a,b)=>b.s-a.s);
+  return cands.slice(0,maxMoves).map(c=>[c.x,c.y]);
+}
+function aiMove(){
+  let myColor=aiColor,opColor=3-aiColor;
+  if(difficulty===1){
+    let moves=generateMoves(30,myColor);
+    if(moves.length===0)return[-1,-1];
+    if(Math.random()<0.65){return moves[Math.floor(Math.random()*Math.min(5,moves.length))];}
+    let best=-99999999,bx=-1,by=-1;
+    for(let[x,y]of moves){let s=evaluatePoint(x,y,myColor);if(s>best){best=s;bx=x;by=y;}}
+    return[bx,by];
+  }else if(difficulty===2){
+    let moves=generateMoves(18,myColor);
+    if(moves.length===0)return[-1,-1];
+    let best=-99999999,bx=-1,by=-1;
+    for(let[x,y]of moves){
+      board[y][x]=myColor;let g=getGroup(x,y);
+      if(!g||g.liberties.size===0){board[y][x]=0;continue;}
+      let myEval=evaluatePoint(x,y,myColor);
+      let opBest=-99999999;
+      let opMoves=generateMoves(12,opColor);
+      for(let[ox,oy]of opMoves){
+        board[oy][ox]=opColor;let eg=getGroup(oy,ox);
+        if(!eg||eg.liberties.size===0){board[oy][ox]=0;continue;}
+        let os=evaluatePoint(ox,oy,opColor);if(os>opBest)opBest=os;
+        board[oy][ox]=0;
+      }
+      let score=myEval-opBest*0.7;
+      board[y][x]=0;if(score>best){best=score;bx=x;by=y;}
+    }
+    return[bx,by];
+  }else{
+    let moves=generateMoves(20,myColor);
+    if(moves.length===0)return[-1,-1];
+    let best=-99999999,bx=-1,by=-1;
+    for(let[x,y]of moves){
+      board[y][x]=myColor;let g=getGroup(x,y);
+      if(!g||g.liberties.size===0){board[y][x]=0;continue;}
+      let myEval=evaluatePoint(x,y,myColor);
+      let opBest=-99999999;
+      let opMoves=generateMoves(12,opColor);
+      for(let[ox,oy]of opMoves){
+        board[oy][ox]=opColor;let eg=getGroup(oy,ox);
+        if(!eg||eg.liberties.size===0){board[oy][ox]=0;continue;}
+        let os=evaluatePoint(ox,oy,opColor);
+        let myReply=-99999999;
+        let myReplyMoves=generateMoves(8,myColor);
+        for(let[mx,my]of myReplyMoves){
+          board[my][mx]=myColor;let mg=getGroup(mx,my);
+          if(!mg||mg.liberties.size===0){board[my][mx]=0;continue;}
+          let rs=evaluatePoint(mx,my,myColor);
+          board[my][mx]=0;
+          if(rs>myReply)myReply=rs;
+        }
+        let opScore=os-myReply*0.5;
+        if(opScore>opBest)opBest=opScore;
+        board[oy][ox]=0;
+      }
+      let score=myEval-opBest*0.65;
+      board[y][x]=0;if(score>best){best=score;bx=x;by=y;}
+    }
+    return[bx,by];
+  }
+}
+
+// ===== Sound =====
+let audioCtx;
+function playSound(type){
+  if(!soundOn)return;
+  try{
+    if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+    if(audioCtx.state==='suspended')audioCtx.resume();
+    let o=audioCtx.createOscillator(),g=audioCtx.createGain();o.connect(g);g.connect(audioCtx.destination);g.gain.value=0.15;
+    if(type===0){o.frequency.value=1200;o.start();o.stop(audioCtx.currentTime+0.06);}
+    else if(type===1){o.frequency.value=880;o.start();o.stop(audioCtx.currentTime+0.15);setTimeout(()=>{let o2=audioCtx.createOscillator(),g2=audioCtx.createGain();o2.connect(g2);g2.connect(audioCtx.destination);g2.gain.value=0.15;o2.frequency.value=1320;o2.start();o2.stop(audioCtx.currentTime+0.3);},160);}
+    else if(type===2){o.frequency.value=300;o.start();o.stop(audioCtx.currentTime+0.3);}
+  }catch(e){}
+}
+
+// ===== BGM =====
+let bgmInCurrent=false,bgmInteractionAdded=false;
+function enableBgmOnInteraction(){if(bgmInteractionAdded)return;bgmInteractionAdded=true;let h=()=>{if(bgmOn){let a=bgmInCurrent?document.getElementById('bgmIn'):document.getElementById('bgmOut');if(a&&a.paused){a.volume=0.3;a.play().catch(()=>{});}}if(audioCtx&&audioCtx.state==='suspended')audioCtx.resume();document.removeEventListener('click',h);document.removeEventListener('keydown',h);document.removeEventListener('touchstart',h);};document.addEventListener('click',h);document.addEventListener('keydown',h);document.addEventListener('touchstart',h);}
+function toggleBgm(){bgmOn=!bgmOn;if(bgmOn){switchBgm(bgmInCurrent);let a=bgmInCurrent?document.getElementById('bgmIn'):document.getElementById('bgmOut');if(a&&a.paused)enableBgmOnInteraction();}else{document.getElementById('bgmIn').pause();document.getElementById('bgmOut').pause();}localStorage.setItem('weiqi_bgm',bgmOn?'1':'0');}
+function switchBgm(inGame){bgmInCurrent=inGame;if(!bgmOn)return;let i=document.getElementById('bgmIn'),o=document.getElementById('bgmOut');if(inGame){o.pause();o.currentTime=0;i.volume=0.3;i.play().catch(()=>{});}else{i.pause();i.currentTime=0;o.volume=0.3;o.play().catch(()=>{});}}
+function loadBgmSetting(){bgmOn=localStorage.getItem('weiqi_bgm')==='1';if(bgmOn){let a=document.getElementById('bgmOut');a.volume=0.3;let p=a.play();if(p&&p.catch)p.catch(()=>enableBgmOnInteraction());}}
+
+// ===== AI Dialogue =====
+function setAiDialogue(t){
+  const easy={
+    0:['初学者也要认真对待。','慢慢来，不着急。','棋道漫漫，你我皆是过客。'],
+    1:['这步棋还行。','有点意思。','你的棋路，我还看不太懂。'],
+    2:['我随便下下。','这步应该没问题吧。','尽力而为。'],
+    3:['竟然赢了？','运气不错。','承让承让。'],
+    4:['回去多练练。','你的棋力还有待提高。','别灰心，再来一局。'],
+    5:['和棋？不错不错。','棋逢对手。','这局挺精彩的。']
+  };
+  const medium={
+    0:['天元开局，道友请了。','棋道无涯，本座先行。','十九路棋盘，尽在掌握。','布石阶段，讲究大局观。','角、边、中腹，次序不可乱。'],
+    1:['此手不错。','本座看看你的棋力。','棋从断处生。','道友这一手，倒有几分意思。','你的棋路，本座已了然于胸。','这步棋走得稳，但本座不会给你机会。'],
+    2:['本座这一手，你可看清了？','天机不可泄露。','此子落下，胜负已分。','本座这一手暗藏杀机。','你已入瓮，还不自知。','天机运转，胜负已分。'],
+    3:['竟然输了...','道友好棋力。','本座认输。','好手段！本座记下了。','道友好棋力，本座甘拜下风。'],
+    4:['回去再修三百年吧。','你连本座的一招都接不住。','修仙之路，你才刚刚起步。','本座今日心情好，且饶你一局。'],
+    5:['今日算你命大。','棋逢对手，痛快！','此局不分胜负，改日再战。','棋逢对手，将遇良才，痛快！']
+  };
+  const hard={
+    0:['十九路棋盘，尽在本座掌中。','天元开局？哼，本座早已算到十步之后。','道友，请入局。','此局，本座不会手下留情。','棋道如天道，一步错，满盘皆输。','本座已布下天罗地网，道友可要小心了。'],
+    1:['这一手倒是出乎本座意料。','你的棋路，本座已看穿七分。','本座倒要看看，你还能撑几手。','不错的试探，可惜本座不会上当。','你的棋风，倒有几分当年老夫的影子。','这一手倒是有些意思。','本座已算到你下一步的落点。'],
+    2:['本座这一手暗藏杀机，你可看清了？','棋局如战场，这一招便是本座的底牌。','你已落入本座的算计之中。','此子落下，你的退路已断。','本座的棋道，岂是你能参透的？','天机运转，胜负已分。','这一手，便是本座的道。','本座已算到十步之后，你无路可逃。','你的棋道，在本座眼中如同儿戏。','本座这一手，便是终局之着。'],
+    3:['竟然...竟然被你寻到了生门...','此局是本座失算，道友这一手，算得上漂亮。','好手段！本座记下了。','道友好棋力，本座甘拜下风。','输了便是输了，本座不会找借口。','你这棋道，已入化境，本座佩服。','没想到...你竟有如此棋力。','本座今日大意了，下次不会了。'],
+    4:['回去再修三百年吧。','区区炼气期，也敢挑战本座？','你这棋力，连入门都算不上。','本座一个念头，便可将你击败。','你的棋路，在本座眼中如同儿戏。','回去好好修炼，再来挑战吧。','你连本座的一招都接不住。','修仙之路，你才刚刚起步。','本座今日心情好，且饶你一局。','你的棋道，还差得远呢。'],
+    5:['今日算你命大，且饶你一局。','天道无常，棋道亦然。','这一局，你我旗鼓相当。','平局？呵，倒是出乎本座意料。','你的棋力，竟与本座不相上下。','此局不分胜负，改日再战。','你竟能与本座战平，有些本事。','棋逢对手，将遇良才，痛快！','这一局，本座未能尽兴。','平局收场，道友好自为之。']
+  };
+  let pool=difficulty===1?easy:(difficulty===2?medium:hard);
+  let arr=pool[t]||pool[0];
+  aiDialogueText=arr[Math.floor(Math.random()*arr.length)];
+}
+
+// ===== Screen Management =====
+function showScreen(id){if(id!=='screenGame'&&window._timerInterval){clearInterval(window._timerInterval);window._timerInterval=null;}document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');if(id==='screenMenu')menuUpdateSubtitle();}
+
+// ===== Dialog =====
+let dialogEnterHandler=null;
+function showDialog(title,inputs,callback,configs){if(dialogEnterHandler){document.removeEventListener('keydown',dialogEnterHandler);dialogEnterHandler=null;}document.getElementById('dialogTitle').textContent=title;let i1=document.getElementById('dialogInput1'),i2=document.getElementById('dialogInput2'),i3=document.getElementById('dialogInput3');i1.style.display='none';i2.style.display='none';i3.style.display='none';i1.value='';i2.value='';i3.value='';let c1=configs&&configs[0]||{},c2=configs&&configs[1]||{},c3=configs&&configs[2]||{};if(inputs>=1){i1.style.display='block';i1.type=c1.type||'text';i1.placeholder=c1.placeholder||'请输入';if(c1.value)i1.value=c1.value;}if(inputs>=2){i2.style.display='block';i2.type=c2.type||'password';i2.placeholder=c2.placeholder||'请输入密码';if(c2.value)i2.value=c2.value;}if(inputs>=3){i3.style.display='block';i3.type=c3.type||'password';i3.placeholder=c3.placeholder||'请再次输入';if(c3.value)i3.value=c3.value;}dialogCallback=callback;document.getElementById('dialogOverlay').classList.add('active');setTimeout(()=>{if(inputs>=1)i1.focus();},100);dialogEnterHandler=e=>{if(e.key==='Enter'){document.removeEventListener('keydown',dialogEnterHandler);dialogEnterHandler=null;dialogConfirm();}};document.addEventListener('keydown',dialogEnterHandler);}
+function dialogConfirm(){if(dialogEnterHandler){document.removeEventListener('keydown',dialogEnterHandler);dialogEnterHandler=null;}let v1=document.getElementById('dialogInput1').value,v2=document.getElementById('dialogInput2').value,v3=document.getElementById('dialogInput3').value;document.getElementById('dialogOverlay').classList.remove('active');if(dialogCallback)dialogCallback([v1,v2,v3]);}
+function dialogCancel(){if(dialogEnterHandler){document.removeEventListener('keydown',dialogEnterHandler);dialogEnterHandler=null;}document.getElementById('dialogOverlay').classList.remove('active');if(dialogCallback)dialogCallback(null);}
+function showAlert(title,msg,callback){if(dialogEnterHandler){document.removeEventListener('keydown',dialogEnterHandler);dialogEnterHandler=null;}document.getElementById('dialogTitle').textContent=title;let i1=document.getElementById('dialogInput1'),i2=document.getElementById('dialogInput2'),i3=document.getElementById('dialogInput3');i1.style.display='none';i2.style.display='none';i3.style.display='none';let box=document.querySelector('.dialog-box');let a=document.createElement('div');a.style.cssText='color:#f0f0e6;font-size:18px;margin-bottom:16px;white-space:pre-line;';a.innerHTML=msg;let ex=box.querySelector('.alert-msg');if(ex)ex.remove();box.insertBefore(a,box.querySelector('.btn-row'));a.className='alert-msg';dialogCallback=()=>{if(dialogEnterHandler){document.removeEventListener('keydown',dialogEnterHandler);dialogEnterHandler=null;}let m=box.querySelector('.alert-msg');if(m)m.remove();if(callback)callback();};document.getElementById('dialogOverlay').classList.add('active');dialogEnterHandler=e=>{if(e.key==='Enter'||e.key==='Escape'){document.removeEventListener('keydown',dialogEnterHandler);dialogEnterHandler=null;dialogConfirm();}};document.addEventListener('keydown',dialogEnterHandler);}
+function showConfirm(title,msg,callback){if(dialogEnterHandler){document.removeEventListener('keydown',dialogEnterHandler);dialogEnterHandler=null;}document.getElementById('dialogTitle').textContent=title;let i1=document.getElementById('dialogInput1'),i2=document.getElementById('dialogInput2'),i3=document.getElementById('dialogInput3');i1.style.display='none';i2.style.display='none';i3.style.display='none';let box=document.querySelector('.dialog-box');let a=document.createElement('div');a.style.cssText='color:#f0f0e6;font-size:18px;margin-bottom:16px;white-space:pre-line;';a.innerHTML=msg;let ex=box.querySelector('.alert-msg');if(ex)ex.remove();box.insertBefore(a,box.querySelector('.btn-row'));a.className='alert-msg';dialogCallback=r=>{if(dialogEnterHandler){document.removeEventListener('keydown',dialogEnterHandler);dialogEnterHandler=null;}let m=box.querySelector('.alert-msg');if(m)m.remove();callback(!!r);};document.getElementById('dialogOverlay').classList.add('active');dialogEnterHandler=e=>{document.removeEventListener('keydown',dialogEnterHandler);dialogEnterHandler=null;if(e.key==='Enter')dialogConfirm();else dialogCancel();};document.addEventListener('keydown',dialogEnterHandler);}
+
+// ===== Login =====
+function showLoginDialog(type){
+  if(type==='login'){showDialog('请输入用户名',2,v=>{if(!v)return;let[n,p]=v;n=(n||'').trim();if(!n||!p){showAlert('提示','请输入完整信息');return;}if(n==='admin'&&p==='0252640'){showDialog('管理员模式：请输入要重置密码的账号',1,v2=>{if(!v2)return;let t=v2[0];if(!t){showAlert('提示','请输入账号');return;}let u=findUser(t);if(!u){showAlert('错误','用户不存在');return;}u.pwdHash=makeStoredPassword('123456',t);updateUser(u);showAlert('成功','账号 '+t+' 的密码已重置为 123456');},[{type:'text',placeholder:'请输入要重置的账号'}]);return;}let u=findUser(n);if(!u){showAlert('错误','账号不存在');return;}if(u.pwdHash!==makeStoredPassword(p,n)&&u.pwdHash!==hashPassword(p,n)&&u.pwdHash!==p){showAlert('错误','密码错误');return;}enterSession(n,u.level,u.exp);showScreen('screenMenu');});}
+  else if(type==='register'){showDialog('请输入新用户名',3,v=>{if(!v)return;let[n,p,p2]=v;n=(n||'').trim();if(!n||!p||!p2){showAlert('提示','请输入完整信息');return;}if(!isValidUsername(n)){showAlert('提示','用户名需为1-16个字符。');return;}if(findUser(n)){showAlert('错误','用户已存在');return;}if(!isValidPassword(p)){showAlert('提示','密码需为4-31位。');return;}if(p!==p2){showAlert('提示','密码不一致。');return;}let u={name:n,pwdHash:makeStoredPassword(p,n),exp:0,level:1,regTime:Math.floor(Date.now()/1000)};updateUser(u);enterSession(n,1,0);showAlert('成功','注册成功',()=>showScreen('screenMenu'));});}
+  else if(type==='changePwd'){showDialog('修改密码',3,v=>{if(!v)return;let[n,o,p]=v;n=(n||'').trim();if(!n||!o||!p){showAlert('提示','请输入完整信息');return;}let u=findUser(n);if(!u){showAlert('错误','用户不存在');return;}if(u.pwdHash!==makeStoredPassword(o,n)&&u.pwdHash!==hashPassword(o,n)&&u.pwdHash!==o){showAlert('错误','旧密码错误');return;}if(!isValidPassword(p)){showAlert('提示','新密码需为4-31位。');return;}u.pwdHash=makeStoredPassword(p,n);updateUser(u);showAlert('成功','密码修改成功');},[{type:'text',placeholder:'请输入账号'},{type:'password',placeholder:'请输入旧密码'},{type:'password',placeholder:'请输入新密码'}]);}
+  else if(type==='forgotPwd'){showDialog('忘记密码',2,v=>{if(!v)return;let n=(v[0]||'').trim(),ap=v[1];if(!n){showAlert('提示','请输入账号');return;}if(ap!=='0252640'){showAlert('错误','管理员密码错误');return;}let u=findUser(n);if(!u){showAlert('错误','用户不存在');return;}u.pwdHash=makeStoredPassword('123456',n);updateUser(u);showAlert('成功','密码已重置为 123456');},[{type:'text',placeholder:'请输入要重置密码的账号'},{type:'password',placeholder:'请输入管理员密码'}]);}
+}
+function guestLogin(){localStorage.removeItem('weiqi_save_'+simpleHash('Guest'));enterSession('Guest',1,0);showScreen('screenMenu');}
+
+// ===== Menu =====
+function menuUpdateSubtitle(){document.getElementById('menuSubtitle').textContent=modelDuelMode?ollamaModel:'天机对局';}
+function menuAction(c){
+  menuUpdateSubtitle();
+  if(c===1){
+    if(hasSaveFile()){showConfirm('已有存档','当前账号已有存档，开始新局将覆盖旧存档。确定？',ok=>{if(ok)startGame(false);});return;}
+    startGame(false);
+  }else if(c===2){
+    if(!hasSaveFile()){showAlert('提示','没有存档，请先开始一局新游戏。');return;}
+    startGame(true);
+  }
+  else if(c===3)showSettings();
+  else if(c===4){if(isGuest())showAlert('提示','游客无法查看个人数据。');else showStats();}
+  else if(c===5)showLeaderboard();
+  else if(c===6)showConfirm('切换账号','确定切换？',ok=>{if(ok){if(window._timerInterval){clearInterval(window._timerInterval);window._timerInterval=null;}gameRunning=0;let gk='weiqi_save_'+simpleHash('Guest');if(isGuest())localStorage.removeItem(gk);enterSession('Guest',1,0);showScreen('screenLogin');}});
+  else if(c===7){window.close();setTimeout(()=>showAlert('提示','请手动关闭浏览器标签页。'),200);}
+}
+
+// ===== Settings =====
+function showSettings(){let guest=isGuest();let html='';let dNames=['','简单','中等','困难'];let tNames=['不限','60秒','120秒','300秒'],tVals=[0,60,120,300];let tIdx=tVals.indexOf(timeLimit);if(tIdx<0)tIdx=0;
+  html+=`<div class="btn" onclick="toggleSetting('difficulty')">难度: ${dNames[difficulty]}</div>`;
+  if(!guest){let isLocal=window.location.protocol==='file:';if(isLocal){if(modelDuelMode)modelDuelMode=0;html+=`<div class="btn" style="opacity:0.5;cursor:not-allowed;">对手: 本地天机 (模型对局需通过服务器)</div>`;}else{html+=`<div class="btn" onclick="toggleSetting('opponent')">${modelDuelMode?'对手: 模型对局':'对手: 本地天机'}</div>`;html+=`<div class="btn" onclick="toggleSetting('ollamaUrl')">Ollama地址: ${ollamaUrl}</div>`;html+=`<div class="btn" onclick="toggleSetting('ollamaModel')">Ollama模型: ${ollamaModel}</div>`;}}
+  html+=`<div class="btn" onclick="toggleSetting('color')">执子: ${playerColor===1?'执黑(先)':'执白(后)'}</div>`;
+  html+=`<div class="btn" onclick="toggleSetting('hint')">形势判断: ${showHints?'开启':'关闭'}</div>`;
+  html+=`<div class="btn" onclick="toggleSetting('sound')">音效: ${soundOn?'开启':'关闭'}</div>`;
+  html+=`<div class="btn" onclick="toggleSetting('bgm')">背景音乐: ${bgmOn?'开启':'关闭'}</div>`;
+  html+=`<div class="btn" onclick="toggleSetting('time')">读秒: ${tNames[tIdx]}</div>`;
+  if(!guest)html+=`<div class="btn" onclick="toggleSetting('logout')">注销账号</div>`;
+  html+=`<div class="btn" onclick="showScreen('screenMenu')">返回</div>`;
+  document.getElementById('settingsList').innerHTML=html;
+  document.getElementById('settingsSubtitle').textContent='围棋: 19路棋盘，黑白轮流落子，终局计算地盘。';
+  showScreen('screenSettings');
+}
+function toggleSetting(a){
+  if(a==='difficulty'){difficulty++;if(difficulty>3)difficulty=1;}
+  else if(a==='opponent'){if(!modelDuelMode){showConfirm('切换到模型对局','切换后将使用本地大模型(Ollama)作为对手。<br><br>前提条件:<br>1. Ollama已启动(终端运行 ollama list 确认)<br>2. 通过 http://localhost:8080 访问本页面<br>&nbsp;&nbsp;&nbsp;(双击文件打开无法调用大模型，CORS限制)<br><br>开始游戏后若连接失败，对局信息栏会实时提示。<br>是否切换？',ok=>{if(ok){modelDuelMode=1;modelDuelConnected=0;resetModelDuelScore();}showSettings();});return;}else modelDuelMode=0;}
+  else if(a==='ollamaUrl'){showDialog('Ollama 服务地址',1,v=>{if(!v||!v[0])return;ollamaUrl=v[0].trim().replace(/\/+$/,'');saveModelSettings();showAlert('已保存','地址已更新: '+ollamaUrl,()=>showSettings());},[{type:'text',placeholder:'http://localhost:11434',value:ollamaUrl}]);return;}
+  else if(a==='ollamaModel'){showDialog('Ollama 模型名称',1,v=>{if(!v||!v[0])return;ollamaModel=v[0].trim();saveModelSettings();resetModelDuelScore();showAlert('已保存','模型已更新: '+ollamaModel,()=>showSettings());},[{type:'text',placeholder:'deepseek-r1:7b',value:ollamaModel}]);return;}
+  else if(a==='color'){playerColor=3-playerColor;}
+  else if(a==='hint'){showHints=!showHints;}
+  else if(a==='sound'){soundOn=!soundOn;}
+  else if(a==='bgm'){toggleBgm();}
+  else if(a==='time'){let tv=[0,60,120,300],ti=tv.indexOf(timeLimit);timeLimit=tv[(ti+1)%4];}
+  else if(a==='logout'){showDialog('请输入当前账号密码',1,v=>{if(!v||!v[0])return;let u=findUser(currentUser);if(!u||u.pwdHash!==makeStoredPassword(v[0],currentUser)){showAlert('错误','密码错误');return;}showConfirm('注销账号','确认注销？',ok=>{if(!ok)return;deleteUser(currentUser);showAlert('成功','已注销。',()=>{enterSession('Guest',1,0);showScreen('screenLogin');});});});return;}
+  showSettings();
+}
+function resetModelDuelScore(){modelDuelPlayerScore=0;modelDuelModelScore=0;modelDuelDrawScore=0;modelDuelConnected=0;modelDuelStatus=ollamaModel+' 已就绪';}
+
+// ===== Stats =====
+function showStats(){renderStats();showScreen('screenStats');}
+function statsTab(p){statsPage=p;renderStats();}
+function renderStats(){
+  let stats=loadStats();let dNames=['','简单','中等','困难'];let regText='游客模式';
+  if(!isGuest()){let u=findUser(currentUser);if(u&&u.regTime){let d=new Date(u.regTime*1000);regText=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}}
+  document.getElementById('statsTitle').textContent=statsPage?'个人数据 · 模型对局':'个人数据 · 天机';
+  document.getElementById('btnStatsTianji').style.borderColor=statsPage===0?'rgb(255,215,0)':'';
+  document.getElementById('btnStatsModel').style.borderColor=statsPage===1?'rgb(255,215,0)':'';
+  let html=`<div style="font-size:22px;color:rgb(255,215,0);margin-bottom:8px;">道友: ${currentUser} &nbsp;&nbsp; 注册: ${regText}</div>`;
+  html+=`<div style="font-size:22px;color:#f0f0e6;margin-bottom:16px;">境界: ${getXianLevelName(currentUserExp)} &nbsp;&nbsp; 经验: ${currentUserExp}</div>`;
+  let totalGames=0;for(let r of stats)if(r.user===currentUser&&r.modelFlag===statsPage)totalGames++;
+  html+=`<div style="margin-bottom:12px;font-size:20px;">总对局: ${totalGames}</div>`;
+  html+=`<div style="border-top:1px solid rgb(72,62,48);padding-top:12px;">`;
+  for(let d=1;d<=3;d++){let w=0,l=0,dr=0;for(let r of stats){if(r.user===currentUser&&r.modelFlag===statsPage&&r.difficulty===d){if(r.result===1)w++;else if(r.result===0)l++;else dr++;}}html+=`<div style="font-size:18px;color:#f0f0e6;margin:4px 0;">${dNames[d]}:  胜 ${w}  负 ${l}  平 ${dr}</div>`;}
+  html+=`</div>`;
+  document.getElementById('statsPanel').innerHTML=html;
+}
+function statsReset(){let s=loadStats().filter(r=>r.user!==currentUser||r.modelFlag!==statsPage);saveStatsList(s);showAlert(statsPage?'模型对局数据已重置':'天机数据已重置','',()=>renderStats());}
+
+// ===== Leaderboard =====
+function showLeaderboard(){lbType=0;renderLeaderboard();showScreen('screenLeaderboard');}
+function lbTab(p){lbType=p;renderLeaderboard();}
+function renderLeaderboard(){
+  let stats=loadStats(),users=loadUsers(),ps={};
+  for(let u of users)if(u.name!=='Guest')ps[u.name]={name:u.name,wins:0,losses:0,draws:0,exp:u.exp||0};
+  if(!isGuest()&&currentUser!=='Guest')ps[currentUser]={name:currentUser,wins:0,losses:0,draws:0,exp:currentUserExp};
+  for(let r of stats){if(r.difficulty!==3||r.modelFlag!==lbType||r.user==='Guest')continue;if(!ps[r.user])ps[r.user]={name:r.user,wins:0,losses:0,draws:0,exp:0};if(r.result===1)ps[r.user].wins++;else if(r.result===0)ps[r.user].losses++;else ps[r.user].draws++;}
+  let arr=Object.values(ps);arr.sort((a,b)=>b.wins-a.wins||(a.wins+a.losses)>0&&b.wins+b.losses>0?(b.wins/(b.wins+b.losses))-(a.wins/(a.wins+a.losses)):0);
+  document.getElementById('lbTitle').textContent=lbType?'模型对局困难排行榜':'天机困难排行榜';
+  document.getElementById('btnLbTianji').style.borderColor=lbType===0?'rgb(255,215,0)':'';
+  document.getElementById('btnLbModel').style.borderColor=lbType===1?'rgb(255,215,0)':'';
+  let html=`<div class="lb-header"><span>排名</span><span>道友</span><span>胜</span><span>负</span><span>平</span><span>境界</span></div>`;
+  for(let i=0;i<Math.min(arr.length,15);i++){let p=arr[i],cls=p.name===currentUser?'lb-row self':'lb-row';html+=`<div class="${cls}"><span>${i+1}</span><span>${p.name}</span><span>${p.wins}</span><span>${p.losses}</span><span>${p.draws}</span><span>${getXianLevelName(p.exp)}</span></div>`;}
+  if(arr.length===0)html+=`<div style="text-align:center;color:rgb(180,160,120);font-size:18px;padding:40px 0;">暂无数据</div>`;
+  document.getElementById('lbPanel').innerHTML=html;
+}
+
+// ===== Model Duel =====
+async function requestModelMoves(){
+  let boardText='';for(let y=0;y<BOARD_SIZE;y++){boardText+=String(y).padStart(2,'0')+' ';for(let x=0;x<BOARD_SIZE;x++)boardText+=board[y][x]===1?'X':board[y][x]===2?'O':'.';boardText+='\n';}
+  let candidates=[];let nearby=Array.from({length:BOARD_SIZE},()=>Array(BOARD_SIZE).fill(0));let hasStone=false;
+  for(let y=0;y<BOARD_SIZE;y++)for(let x=0;x<BOARD_SIZE;x++){if(board[y][x]!==0){hasStone=true;for(let dy=-3;dy<=3;dy++)for(let dx=-3;dx<=3;dx++){let nx=x+dx,ny=y+dy;if(isInside(nx,ny))nearby[ny][nx]=1;}}}
+  if(!hasStone)candidates.push({id:1,move:[9,9],note:'天元'});else{let idx=1;for(let y=0;y<BOARD_SIZE&&idx<=20;y++)for(let x=0;x<BOARD_SIZE&&idx<=20;x++){if(!nearby[y][x]||board[y][x]!==0)continue;board[y][x]=aiColor;let g=getGroup(x,y);if(g&&g.liberties.size===0){board[y][x]=0;continue;}board[y][x]=0;let s=evaluatePoint(x,y,aiColor);candidates.push({id:idx++,move:[x,y],score:s,note:'候选'});}candidates.sort((a,b)=>b.score-a.score);candidates=candidates.slice(0,20);candidates.forEach((c,i)=>c.id=i+1);}
+  let candText=candidates.map(c=>`id=${c.id} pos=(${c.move[0]},${c.move[1]}) score=${c.score||0} note=${c.note}`).join('\n');
+  let colorText=aiColor===1?'黑棋(X)':'白棋(O)';
+  let prompt=`围棋19x19棋盘，坐标0-18。X=黑棋 O=白棋 .=空。你执${colorText}。\n候选由引擎验证为合法空点。只从候选id中选择一个，优先提子/做活/占大场。\n只返回JSON: {"id":1}\n棋盘:\n${boardText}候选:\n${candText}`;
+  try{let resp=await fetch(ollamaUrl+'/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:ollamaModel,think:false,messages:[{role:'system',content:'你是围棋引擎。只从候选id中选择，返回JSON。'},{role:'user',content:prompt}],stream:false,options:{temperature:0.1,num_predict:32}})});let data=await resp.json();let content=data.message?data.message.content:'';content=content.replace(/<think>[\s\S]*?<\/think>/g,'').trim();modelDuelConnected=1;modelDuelStatus='';let m=content.match(/"id"\s*:\s*(\d+)/);if(m){let id=parseInt(m[1]);let c=candidates.find(c=>c.id===id);if(c)return c.move;}return candidates.length>0?candidates[0].move:null;}catch(e){modelDuelConnected=0;modelDuelStatus='Ollama连接失败 - 请确认Ollama已启动且通过localhost访问';if(typeof renderGame==='function')renderGame();return candidates.length>0?candidates[0].move:null;}
+}
+
+// ===== Timer =====
+function startTimer(){
+  if(timeLimit<=0)return;
+  if(window._timerInterval)clearInterval(window._timerInterval);
+  window._timerInterval=setInterval(()=>{
+    if(document.getElementById('dialogOverlay').classList.contains('active'))return;
+    if(timeLimit>0&&!gameOver&&!aiThinking&&currentTurn===playerColor){
+      let e=(Date.now()-stepStartTime)/1000;
+      let remain=Math.max(0,timeLimit-e);
+      let countdown=document.getElementById('timerCountdown');
+      let display=document.getElementById('timerDisplay');
+      if(countdown&&display){
+        countdown.style.display='block';
+        display.textContent=remain.toFixed(0);
+        if(remain<=5){display.className='time-display urgent';}
+        else{display.className='time-display';}
+      }
+      if(remain<=0){gameOver=1;result=playerColor===1?0:1;addStatRecord(result);playSound(2);setAiDialogue(4);renderResult();}
+    }else{
+      let countdown=document.getElementById('timerCountdown');
+      if(countdown)countdown.style.display='none';
+    }
+  },200);
+}
+
+// ===== Game =====
+function startGame(isContinue){
+  gameOver=0;result=-1;lastCol=-1;lastRow=-1;hoverCol=-1;hoverRow=-1;
+  currentTurn=1;gameRunning=1;
+  if(isContinue){let s=loadGameSave();if(s){board=s.board.map(r=>[...r]);moveHistory=s.moveHistory?s.moveHistory.map(m=>({...m})):[];historyCount=s.historyCount||0;captures=s.captures||[0,0];difficulty=s.difficulty;playerColor=s.playerColor;aiColor=3-playerColor;if(s.timeLimit!==undefined)timeLimit=s.timeLimit;stepCount=historyCount;currentTurn=s.currentTurn||1;stepStartTime=Date.now();passCount=s.passCount||0;koPos=s.koPos||null;if(historyCount>0){let last=moveHistory[moveHistory.length-1];if(last&&last.x>=0){lastCol=last.x;lastRow=last.y;}}}else{initBoard();showAlert('提示','没有找到存档，已开始新游戏。');}}
+  else{initBoard();aiColor=3-playerColor;}
+  document.getElementById('btnSaveOrChange').textContent='存档';
+  aiDialogueText='';setAiDialogue(0);
+  showScreen('screenGame');switchBgm(true);
+  canvas=document.getElementById('gameCanvas');ctx=canvas.getContext('2d');setupCanvasEvents();window.dispatchEvent(new Event('resize'));
+  if(window._timerInterval)clearInterval(window._timerInterval);
+  startTimer();
+  let needAiStart=!isContinue&&playerColor===2;
+  if(needAiStart){aiThinking=1;renderGame();setTimeout(()=>{playAITurn().then(res=>{if(res===1){gameOver=1;result=0;addStatRecord(0);setAiDialogue(4);aiThinking=0;renderResult();return;}currentTurn=playerColor;stepStartTime=Date.now();aiThinking=0;renderGame();}).catch(()=>{aiThinking=0;currentTurn=playerColor;renderGame();});},100);}
+  else renderGame();
+}
+function hasSaveFile(){return!!localStorage.getItem('weiqi_save_'+simpleHash(currentUser||'Guest'));}
+function loadGameSave(){try{let s=JSON.parse(localStorage.getItem('weiqi_save_'+simpleHash(currentUser||'Guest')));if(s&&s.version!==SAVE_VERSION)return null;return s;}catch(e){return null;}}
+
+// ===== Rendering =====
+function getCellX(c){return MARGIN+c*CELL_SIZE;}
+function getCellY(r){return MARGIN+r*CELL_SIZE;}
+function renderGame(){
+  if(!ctx)return;
+  let cw=BOARD_SIZE*CELL_SIZE+MARGIN*2;
+  ctx.clearRect(0,0,cw,cw);
+  ctx.fillStyle='rgb(200,170,100)';ctx.fillRect(0,0,cw,cw);
+  ctx.strokeStyle='rgb(60,50,30)';ctx.lineWidth=1;
+  for(let i=0;i<BOARD_SIZE;i++){ctx.beginPath();ctx.moveTo(getCellX(0),getCellY(i));ctx.lineTo(getCellX(BOARD_SIZE-1),getCellY(i));ctx.stroke();ctx.beginPath();ctx.moveTo(getCellX(i),getCellY(0));ctx.lineTo(getCellX(i),getCellY(BOARD_SIZE-1));ctx.stroke();}
+  let stars=[[3,3],[3,9],[3,15],[9,3],[9,9],[9,15],[15,3],[15,9],[15,15]];
+  ctx.fillStyle='rgb(60,50,30)';for(let[sx,sy]of stars){ctx.beginPath();ctx.arc(getCellX(sx),getCellY(sy),3,0,Math.PI*2);ctx.fill();}
+  ctx.fillStyle='rgb(80,65,40)';ctx.font='11px monospace';ctx.textAlign='center';ctx.textBaseline='middle';
+  for(let i=0;i<BOARD_SIZE;i++){ctx.fillText(i+1,getCellX(i),MARGIN-14);ctx.fillText(String.fromCharCode(65+i),MARGIN-16,getCellY(i));}
+  for(let y=0;y<BOARD_SIZE;y++)for(let x=0;x<BOARD_SIZE;x++){if(board[y][x]===0)continue;drawStone(x,y,board[y][x]);}
+  // 领地可视化
+  if(showHints&&!gameOver){drawTerritory();}
+  if(lastCol>=0&&lastRow>=0&&isInside(lastCol,lastRow)){ctx.strokeStyle='rgb(255,60,60)';ctx.lineWidth=2;ctx.beginPath();ctx.arc(getCellX(lastCol),getCellY(lastRow),CELL_SIZE/2-2,0,Math.PI*2);ctx.stroke();}
+  if(hoverCol>=0&&hoverRow>=0&&!gameOver&&!aiThinking&&board[hoverRow][hoverCol]===0){let cx=getCellX(hoverCol),cy=getCellY(hoverRow),r=CELL_SIZE/2-4;ctx.fillStyle=currentTurn===1?'rgba(30,30,30,0.5)':'rgba(240,240,240,0.5)';ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.fill();}
+  renderInfoPanel();
+}
+function drawStone(col,row,color){
+  let cx=getCellX(col),cy=getCellY(row),r=CELL_SIZE/2-2;
+  if(color===1){ctx.fillStyle='rgb(10,10,10)';ctx.beginPath();ctx.arc(cx,cy,r+1,0,Math.PI*2);ctx.fill();ctx.fillStyle='rgb(35,35,35)';ctx.beginPath();ctx.arc(cx,cy,r-1,0,Math.PI*2);ctx.fill();ctx.fillStyle='rgb(90,90,90)';ctx.beginPath();ctx.arc(cx-r/3,cy-r/3,r/4,0,Math.PI*2);ctx.fill();}
+  else{ctx.fillStyle='rgb(180,180,180)';ctx.beginPath();ctx.arc(cx,cy,r+1,0,Math.PI*2);ctx.fill();ctx.fillStyle='rgb(245,245,240)';ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.fill();ctx.strokeStyle='rgb(200,200,210)';ctx.lineWidth=1;ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.stroke();ctx.fillStyle='rgb(255,255,255)';ctx.beginPath();ctx.arc(cx-r/3,cy-r/3,r/4,0,Math.PI*2);ctx.fill();}
+}
+function drawTerritory(){
+  let visited=Array.from({length:BOARD_SIZE},()=>Array(BOARD_SIZE).fill(false));
+  for(let y=0;y<BOARD_SIZE;y++)for(let x=0;x<BOARD_SIZE;x++){
+    if(board[y][x]!==0||visited[y][x])continue;
+    let stack=[[x,y]];visited[y][x]=true;let region=[];let owner=0;let ok=true;
+    while(stack.length){
+      let[cx,cy]=stack.pop();region.push([cx,cy]);
+      for(let[dx,dy]of[[1,0],[-1,0],[0,1],[0,-1]]){
+        let nx=cx+dx,ny=cy+dy;
+        if(!isInside(nx,ny)){ok=false;continue;}
+        if(board[ny][nx]===0&&!visited[ny][nx]){visited[ny][nx]=true;stack.push([nx,ny]);}
+        else if(board[ny][nx]!==0){if(owner===0)owner=board[ny][nx];else if(owner!==board[ny][nx])ok=false;}
+      }
+    }
+    if(ok&&owner>0){
+      let color=owner===1?'rgba(0,0,0,0.15)':'rgba(255,255,255,0.12)';
+      ctx.fillStyle=color;
+      for(let[rx,ry]of region){ctx.fillRect(getCellX(rx)-CELL_SIZE/2+2,getCellY(ry)-CELL_SIZE/2+2,CELL_SIZE-4,CELL_SIZE-4);}
+    }
+  }
+}
+function renderInfoPanel(){
+  let html='';html+=`<div class="info-title">对局信息</div><div class="info-sep2"></div>`;
+  html+=`<div class="info-line">道友: ${currentUser}</div>`;
+  html+=`<div class="info-line gold">境界: ${getXianLevelName(currentUserExp)}</div>`;
+  let dNames=['','简单','中等','困难'];html+=`<div class="info-line">难度: ${dNames[difficulty]}</div>`;
+  html+=`<div class="info-sep"></div>`;
+  if(modelDuelMode){let oppText=modelDuelConnected?ollamaModel:ollamaModel+'(已断开)';html+=`<div class="info-line">对手: ${oppText}</div>`;html+=`<div class="info-line">比分: 道友${modelDuelPlayerScore} 模型${modelDuelModelScore} 平${modelDuelDrawScore}</div>`;if(modelDuelStatus){let sc=modelDuelStatus.includes('失败')?'rgb(255,100,80)':'rgb(220,205,160)';html+=`<div class="info-line" style="color:${sc};font-size:14px;">${modelDuelStatus}</div>`;}else if(modelDuelConnected){html+=`<div class="info-line" style="color:rgb(120,220,120);font-size:14px;">${ollamaModel} 连接正常</div>`;}}
+  else html+=`<div class="info-line">对手: 本地天机</div>`;
+  html+=`<div class="info-line">执子: ${playerColor===1?'执黑(先)':'执白(后)'}</div>`;
+  html+=`<div class="info-sep"></div>`;
+  // 提子数醒目显示
+  html+=`<div style="display:flex;justify-content:center;gap:24px;margin:6px 0;">`;
+  html+=`<div style="text-align:center;"><div style="font-size:28px;color:#f0f0e6;font-weight:bold;">${captures[0]}</div><div style="font-size:12px;color:rgb(180,160,120);">黑提</div></div>`;
+  html+=`<div style="text-align:center;"><div style="font-size:28px;color:#f0f0e6;font-weight:bold;">${captures[1]}</div><div style="font-size:12px;color:rgb(180,160,120);">白提</div></div>`;
+  html+=`</div>`;
+  html+=`<div class="info-sep"></div>`;
+  let sc=getScoreText();html+=`<div class="info-line gold">形势: ${sc.black}</div>`;
+  html+=`<div class="info-line">步数: ${stepCount}</div>`;
+  html+=`<div class="info-sep"></div>`;
+  // 落子记录
+  html+=`<div class="info-line" style="font-size:13px;color:rgb(180,160,120);">最近落子:</div>`;
+  let recentMoves=moveHistory.filter(m=>m.x>=0).slice(-6);
+  if(recentMoves.length>0){
+    let moveTexts=recentMoves.map((m,i)=>{
+      let col=String.fromCharCode(65+m.x);
+      let row=m.y+1;
+      let color=m.color===1?'●':'○';
+      return `<span style="color:${m.color===1?'#f0f0e6':'rgb(200,200,210)'}">${color}${col}${row}</span>`;
+    });
+    html+=`<div class="info-line" style="font-size:13px;">${moveTexts.join(' → ')}</div>`;
+  } else {
+    html+=`<div class="info-line" style="font-size:13px;color:rgb(120,110,90);">暂无</div>`;
+  }
+  html+=`<div class="info-sep"></div>`;
+  if(gameOver){let playerWin=(result===1&&playerColor===1)||(result===0&&playerColor===2);let rt=playerWin?'你胜':(result===2?'和棋':'你负');let rc=playerWin?'rgb(255,215,0)':(result===2?'#f0f0e6':'rgb(255,120,100)');html+=`<div class="info-line" style="color:${rc}">对局结束 · ${rt}</div>`;}
+  else if(aiThinking)html+=`<div class="info-line gold">${modelDuelMode?ollamaModel+' 思考中...':'天机推演中...'}</div>`;
+  else html+=`<div class="info-line gold">回合: ${currentTurn===playerColor?'道友':(modelDuelMode?ollamaModel:'天机')} &nbsp; ${currentTurn===1?'执黑':'执白'}</div>`;
+  if(aiDialogueText)html+=`<div class="info-sep"></div><div class="info-line" style="color:rgb(220,205,160);font-style:italic;font-size:14px;">"${aiDialogueText}"</div>`;
+  if(!gameOver)html+=`<div style="margin-top:auto;padding-top:12px;"><div class="btn-go-end" onclick="gameEnd()">终局</div></div>`;
+  let panel=document.getElementById('infoPanel');if(panel.innerHTML!==html)panel.innerHTML=html;
+}
+
+// ===== Game Input =====
+let canvasEventsSetup=false;
+function setupCanvasEvents(){
+  if(canvasEventsSetup)return;canvasEventsSetup=true;
+  canvas.addEventListener('mousemove',e=>{let rect=canvas.getBoundingClientRect();let sx=canvas.width/rect.width,sy=canvas.height/rect.height;let mx=(e.clientX-rect.left)*sx,my=(e.clientY-rect.top)*sy;let cell=getClickCell(mx,my);let oc=hoverCol,or=hoverRow;if(cell){hoverCol=cell.x;hoverRow=cell.y;}else{hoverCol=-1;hoverRow=-1;}if(oc!==hoverCol||or!==hoverRow)renderGame();});
+  canvas.addEventListener('click',e=>{let rect=canvas.getBoundingClientRect();let sx=canvas.width/rect.width,sy=canvas.height/rect.height;handleBoardClick((e.clientX-rect.left)*sx,(e.clientY-rect.top)*sy);});
+  canvas.addEventListener('touchstart',e=>{e.preventDefault();let t=e.touches[0],rect=canvas.getBoundingClientRect();let sx=canvas.width/rect.width,sy=canvas.height/rect.height;handleBoardClick((t.clientX-rect.left)*sx,(t.clientY-rect.top)*sy);},{passive:false});
+}
+function getClickCell(mx,my){let left=getCellX(0)-CELL_SIZE/2,right=getCellX(BOARD_SIZE-1)+CELL_SIZE/2,top=getCellY(0)-CELL_SIZE/2,bottom=getCellY(BOARD_SIZE-1)+CELL_SIZE/2;if(mx<left||mx>right||my<top||my>bottom)return null;let x=Math.round((mx-MARGIN)/CELL_SIZE),y=Math.round((my-MARGIN)/CELL_SIZE);x=Math.max(0,Math.min(BOARD_SIZE-1,x));y=Math.max(0,Math.min(BOARD_SIZE-1,y));return{x,y};}
+async function handleBoardClick(mx,my){
+  if(gameOver){if(!document.getElementById('resultOverlay').classList.contains('active'))showAlert('对局已结束','点击确定重开。',()=>resultContinue());return;}
+  if(aiThinking||currentTurn!==playerColor)return;
+  let cell=getClickCell(mx,my);if(!cell)return;
+  let{x:col,y:row}=cell;
+  if(!playMove(col,row,playerColor))return;
+  lastCol=col;lastRow=row;playSound(0);setAiDialogue(1);renderGame();
+  currentTurn=aiColor;aiThinking=1;renderGame();
+  try{
+    let res=await playAITurn();
+    if(modelDuelMode&&modelDuelConnected)modelDuelStatus='';
+    setAiDialogue(2);currentTurn=playerColor;stepStartTime=Date.now();
+    if(res===1){gameOver=1;result=playerColor===1?1:0;addStatRecord(result);playSound(1);setAiDialogue(3);aiThinking=0;renderResult();return;}
+    if(res===2){aiThinking=0;gameEnd();return;}
+    aiThinking=0;renderGame();
+  }catch(e){
+    aiThinking=0;currentTurn=playerColor;stepStartTime=Date.now();renderGame();
+  }
+}
+async function playAITurn(){
+  if(modelDuelMode){modelDuelStatus=ollamaModel+' 思考中...';renderGame();}
+  
+  let emptyCount=0;
+  for(let y=0;y<BOARD_SIZE;y++)for(let x=0;x<BOARD_SIZE;x++)if(board[y][x]===0)emptyCount++;
+
+  if(!modelDuelMode){
+    let sc=getScoreText();
+    let myScore = aiColor===1 ? sc.blackScore : sc.whiteScore;
+    let opScore = aiColor===1 ? sc.whiteScore : sc.blackScore;
+    if(myScore < opScore - 20 && emptyCount < 50){
+      setAiDialogue(3);
+      return 1;
+    }
+    if(emptyCount < 10){
+      let moves=generateMoves(10,aiColor);
+      let hasMove=false;
+      for(let[mx,my]of moves){board[my][mx]=aiColor;let g=getGroup(mx,my);board[my][mx]=0;if(g&&g.liberties.size>0){hasMove=true;break;}}
+      if(!hasMove){passMove();lastCol=-1;lastRow=-1;playSound(0);if(passCount>=2){setAiDialogue(5);return 2;}setAiDialogue(2);return 0;}
+    }
+  }
+  
+  let move;
+  if(modelDuelMode){move=await requestModelMoves();}
+  else move=aiMove();
+  if(!move||move[0]===-1){passMove();lastCol=-1;lastRow=-1;playSound(0);if(passCount>=2){setAiDialogue(5);return 2;}setAiDialogue(2);return 0;}
+  if(!playMove(move[0],move[1],aiColor)){
+    let moved=false;
+    for(let retry=0;retry<3;retry++){
+      let m=aiMove();
+      if(m[0]>=0&&playMove(m[0],m[1],aiColor)){lastCol=m[0];lastRow=m[1];moved=true;break;}
+    }
+    if(!moved){passMove();lastCol=-1;lastRow=-1;}
+  }else{lastCol=move[0];lastRow=move[1];}playSound(0);
+  setAiDialogue(2);
+  return 0;
+}
+
+// ===== Game Actions =====
+function gamePass(){
+  if(gameOver||aiThinking||currentTurn!==playerColor)return;
+  passMove();lastCol=-1;lastRow=-1;playSound(0);setAiDialogue(2);renderGame();
+  if(passCount>=2){gameEnd();return;}
+  currentTurn=aiColor;aiThinking=1;renderGame();
+  playAITurn().then(res=>{
+    if(res===1){gameOver=1;result=playerColor===1?1:0;addStatRecord(result);playSound(1);setAiDialogue(3);aiThinking=0;renderResult();return;}
+    setAiDialogue(2);currentTurn=playerColor;stepStartTime=Date.now();aiThinking=0;
+    if(passCount>=2){gameEnd();return;}
+    renderGame();
+  }).catch(()=>{
+    aiThinking=0;currentTurn=playerColor;renderGame();
+  });
+}
+function gameEnd(){
+  if(gameOver)return;
+  let sc=getScoreText();
+  let diff=Math.abs(sc.blackScore-sc.whiteScore);
+  let preview=diff<0.5?'和棋':(sc.blackScore>sc.whiteScore?'黑胜'+diff.toFixed(1)+'目':'白胜'+diff.toFixed(1)+'目');
+  showConfirm('终局确认','当前形势: '+preview+'\n确定终局并结算？',ok=>{
+    if(!ok)return;
+    let playerWin=(sc.blackScore>sc.whiteScore&&playerColor===1)||(sc.whiteScore>sc.blackScore&&playerColor===2);
+    let draw=Math.abs(sc.blackScore-sc.whiteScore)<0.5;
+    if(draw){gameOver=1;result=2;addStatRecord(2);playSound(2);setAiDialogue(5);}
+    else if(playerWin){gameOver=1;result=playerColor===1?1:0;addStatRecord(result);playSound(1);setAiDialogue(3);}
+    else{gameOver=1;result=playerColor===1?0:1;addStatRecord(result);playSound(2);setAiDialogue(4);}
+    renderResult();
+  });
+}
+function gameUndo(){
+  if(gameOver){showAlert('提示','对局已结束。');return;}
+  if(aiThinking){showAlert('提示','AI思考中。');return;}
+  if(moveHistory.length<2){showAlert('提示','无可悔棋。');return;}
+  undoMove();undoMove();
+  if(moveHistory.length>0){let last=moveHistory[moveHistory.length-1];if(last.x>=0){lastCol=last.x;lastRow=last.y;}else{lastCol=-1;lastRow=-1;}}
+  else{lastCol=-1;lastRow=-1;currentTurn=1;if(playerColor===2){aiThinking=1;renderGame();setTimeout(()=>{playAITurn().then(res=>{if(res===1){gameOver=1;result=0;addStatRecord(0);setAiDialogue(4);aiThinking=0;renderResult();return;}currentTurn=playerColor;stepStartTime=Date.now();aiThinking=0;renderGame();}).catch(()=>{aiThinking=0;currentTurn=playerColor;renderGame();});},100);return;}}
+  stepStartTime=Date.now();
+  renderGame();
+}
+function gameGiveUp(){if(gameOver||aiThinking||currentTurn!==playerColor)return;showConfirm('认输','确定认输？',ok=>{if(ok){gameOver=1;result=currentTurn===1?0:1;addStatRecord(result);playSound(2);setAiDialogue(4);renderResult();}});}
+function gameSaveOrChange(){
+  if(gameOver){showAlert('存档','终局不可存档。');return;}
+  if(aiThinking){showAlert('提示','AI思考中。');return;}
+  if(hasSaveFile()){
+    showConfirm('覆盖存档','当前已有存档，确定覆盖？',ok=>{
+      if(!ok)return;
+      doSave();
+    });
+  } else {
+    doSave();
+  }
+}
+function doSave(){
+  let s={board:board.map(r=>[...r]),moveHistory:moveHistory.map(m=>({...m})),historyCount,captures:[...captures],difficulty,playerColor,currentTurn,gameOver,result,version:SAVE_VERSION,passCount,koPos,timeLimit,stepStartTime,owner:currentUser||'Guest',saveTime:Math.floor(Date.now()/1000)};
+  localStorage.setItem('weiqi_save_'+simpleHash(currentUser||'Guest'),JSON.stringify(s));
+  showAlert('存档成功','');
+}
+function gameBackToMenu(){if(window._timerInterval){clearInterval(window._timerInterval);window._timerInterval=null;}if(gameOver){localStorage.removeItem('weiqi_save_'+simpleHash(currentUser||'Guest'));gameRunning=0;showScreen('screenMenu');switchBgm(false);return;}showConfirm('返回','未保存的进度将丢失，确定返回？',ok=>{if(ok){gameRunning=0;showScreen('screenMenu');switchBgm(false);}else startTimer();});}
+function renderResult(){
+  let box=document.getElementById('resultBox');
+  let overlay=document.getElementById('resultOverlay');
+  overlay.className='result-overlay';
+  let html='';
+  let playerWin=(result===1&&playerColor===1)||(result===0&&playerColor===2);
+  let draw=result===2;
+  if(draw){
+    overlay.classList.add('draw-bg');
+    let title='和棋';
+    let line1=modelDuelMode?ollamaModel+'：此局平分秋色。':'天机：今日算你命大，且饶你一局。';
+    html=`<div class="title draw">${title}</div><div class="sep"></div><div class="line">${line1}</div><div class="btn-continue" onclick="resultContinue()">点击继续</div>`;
+  }else if(playerWin){
+    overlay.classList.add('win-bg');
+    let title=playerColor===1?'黑胜':'白胜';
+    let line1=modelDuelMode?ollamaModel+'：此局我已记下。':'天机：此局是本座失算。';
+    let line2=modelDuelMode?'点击继续下一局。':'道友这一手，算得上漂亮。';
+    html=`<div class="title win">${title}</div><div class="sep"></div><div class="line">${line1}</div><div class="line">${line2}</div><div class="btn-continue" onclick="resultContinue()">点击继续</div>`;
+  }else{
+    overlay.classList.add('lose-bg');
+    let title=playerColor===1?'白胜':'黑胜';
+    let line1=modelDuelMode?ollamaModel+'：这一局由我拿下。':'天机：区区炼气期，也敢挑战本座？';
+    let line2=modelDuelMode?'点击继续下一局。':'回去再修三百年吧。';
+    html=`<div class="title lose">${title}</div><div class="sep"></div><div class="line">${line1}</div>`;
+    if(line2)html+=`<div class="line">${line2}</div>`;
+    html+=`<div class="btn-continue" onclick="resultContinue()">点击继续</div>`;
+  }
+  box.innerHTML=html;overlay.classList.add('active');setTimeout(()=>overlay.classList.add('visible'),10);
+}
+function resultContinue(){if(window._resultContinuing)return;window._resultContinuing=true;setTimeout(()=>window._resultContinuing=false,2000);if(window._timerInterval){clearInterval(window._timerInterval);window._timerInterval=null;}let o=document.getElementById('resultOverlay');o.classList.remove('visible');setTimeout(()=>o.classList.remove('active'),300);if(gameOver)localStorage.removeItem('weiqi_save_'+simpleHash(currentUser||'Guest'));initBoard();aiColor=3-playerColor;gameOver=0;result=-1;lastCol=-1;lastRow=-1;currentTurn=playerColor;aiDialogueText='';setAiDialogue(0);if(playerColor===2){aiThinking=1;renderGame();setTimeout(()=>{playAITurn().then(res=>{if(res===1){gameOver=1;result=playerColor===1?1:0;addStatRecord(result);playSound(1);setAiDialogue(3);aiThinking=0;renderResult();return;}setAiDialogue(2);currentTurn=playerColor;stepStartTime=Date.now();aiThinking=0;renderGame();}).catch(()=>{aiThinking=0;currentTurn=playerColor;renderGame();});},100);}else renderGame();startTimer();}
+
+// ===== Keyboard =====
+document.addEventListener('keydown',e=>{
+  if(!gameRunning)return;if(document.getElementById('dialogOverlay').classList.contains('active'))return;
+  if(document.getElementById('resultOverlay').classList.contains('active')){if(e.key==='Enter'||e.key==='Escape')resultContinue();return;}
+  if(aiThinking||gameOver)return;
+  if(e.key==='p'||e.key==='P'){e.preventDefault();gamePass();}
+  else if(e.key==='u'||e.key==='U'){e.preventDefault();gameUndo();}
+  else if(e.key==='g'||e.key==='G'){e.preventDefault();gameGiveUp();}
+  else if(e.key==='Escape'){e.preventDefault();gameBackToMenu();}
+});
+
+// ===== Init =====
+loadModelSettings();loadBgmSetting();if(window.location.protocol==='file:')modelDuelMode=0;
+window.addEventListener('resize',()=>{if(!canvas)return;let w=Math.min(820,window.innerWidth);canvas.style.width=w+'px';canvas.style.height=w+'px';});
+</script>
+</body>
+</html>
